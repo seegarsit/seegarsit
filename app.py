@@ -115,51 +115,100 @@ def now_ts():
 # --------------------------------------------------------------------------------------
 BASE_HTML = """
 <!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Seegars IT Tickets</title>
-  <link href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css\" rel=\"stylesheet\">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Brand font (fallbacks if CoFo Gothic isn’t available) -->
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
-    body{ background:#0b1020; color:#e9ecf1; }
-    .navbar, .card{ background:#121936; border:0; }
-    .form-control, .form-select{ background:#0e1530; color:#e9ecf1; border-color:#27315a; }
-    .form-control:focus{ background:#0e1530; color:#fff; border-color:#5b7cfa; box-shadow:0 0 0 .2rem rgba(91,124,250,.25); }
-    .badge{ font-weight:600; }
-    a{ color:#9db6ff; }
-    a:hover{ color:#c7d4ff; }
-    .table{ color:#e9ecf1; }
+    :root{
+      --sg-black:#231F20;
+      --sg-green:#008752;
+      --sg-lime:#BCD531;
+      --sg-gray:#DEE0D9;
+      --sg-offwhite:#F5F6F4;
+    }
+    html,body{ height:100%; }
+    body{
+      background:var(--sg-offwhite);
+      color:var(--sg-black);
+      font-family:"CoFo Gothic","Open Sans","Segoe UI","Helvetica Neue",Arial,sans-serif;
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    .navbar{
+      background:var(--sg-black)!important;
+      border-bottom:4px solid var(--sg-green);
+    }
+    .navbar .navbar-brand{
+      font-weight:700; letter-spacing:.2px;
+      color:#fff!important;
+    }
+    .navbar .btn-primary{
+      background:var(--sg-green); border-color:var(--sg-green);
+    }
+    .navbar .btn-primary:hover{
+      background:#006e43; border-color:#006e43;
+    }
+    .card{
+      background:#fff; border:1px solid var(--sg-gray);
+      box-shadow:0 6px 18px rgba(0,0,0,.035);
+    }
+    .form-control, .form-select{
+      background:#fff; color:var(--sg-black); border-color:var(--sg-gray);
+    }
+    .form-control:focus, .form-select:focus{
+      border-color:var(--sg-green);
+      box-shadow:0 0 0 .2rem rgba(0,135,82,.15);
+    }
+    a{ color:var(--sg-green); text-decoration:none; }
+    a:hover{ color:#006e43; }
+    .btn-primary{
+      background:var(--sg-green); border-color:var(--sg-green);
+    }
+    .btn-primary:hover{
+      background:#006e43; border-color:#006e43;
+    }
+    .btn-outline-light{
+      color:var(--sg-black); border-color:var(--sg-black);
+    }
+    .badge.text-bg-danger{ background:#c53030!important; }
+    .badge.text-bg-warning{ background:var(--sg-lime)!important; color:#1b1b1b; }
+    .badge.text-bg-primary{ background:var(--sg-green)!important; }
     .table > :not(caption) > * > * { background: transparent; }
+    .text-secondary{ color:#676a6d!important; }
   </style>
 </head>
 <body>
-<nav class=\"navbar navbar-expand-lg navbar-dark mb-4\">
-  <div class=\"container\">
-    <a class=\"navbar-brand\" href=\"{{ url_for('list_tickets') }}\">🛠️ Seegars IT Tickets</a>
-    <div class=\"ms-auto d-flex align-items-center gap-2\">
+<nav class="navbar navbar-expand-lg navbar-dark mb-4">
+  <div class="container">
+    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">🛠️ Seegars IT Tickets</a>
+    <div class="ms-auto d-flex align-items-center gap-2">
       {% if session.get('user') %}
-        <span class=\"small text-secondary\">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
-        <a class=\"btn btn-outline-light btn-sm\" href=\"{{ url_for('logout') }}\">Logout</a>
+        <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
+        <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
       {% else %}
-        <a class=\"btn btn-primary btn-sm\" href=\"{{ url_for('login') }}\">Login with Microsoft</a>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Login with Microsoft</a>
       {% endif %}
-      <a class=\"btn btn-primary\" href=\"{{ url_for('new_ticket') }}\">+ New Ticket</a>
+      <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
     </div>
   </div>
 </nav>
-<main class=\"container\">
+<main class="container">
   {% with messages = get_flashed_messages() %}
     {% if messages %}
-      <div class=\"alert alert-info\">{{ messages|join('\\n') }}</div>
+      <div class="alert alert-info">{{ messages|join('\\n') }}</div>
     {% endif %}
   {% endwith %}
   {% block content %}{% endblock %}
 </main>
-<script src=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js\"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
+
 
 INDEX_HTML = """
 {% extends 'base.html' %}
