@@ -316,15 +316,17 @@ NEW_HTML = """
       </div>
       <div class="col-md-4">
         <label class="form-label">Priority</label>
-        <select name="priority" class="form-select">
+<small class="text-muted"><i>(select option from dropdown list)</i></small>
+<select name="priority" class="form-select">
           <option value="Low">Low — General request or question</option>
           <option value="Medium">Medium — Interferes with productivity</option>
           <option value="High">High — Stops work / critical system issue</option>
         </select>
       </div>
       <div class="col-md-12">
-        <label class="form-label">Description</label>
-        <textarea name="description" class="form-control" rows="5" required></textarea>
+       <label class="form-label">Description</label>
+<small class="text-muted"><i>(include as many details as possible)</i></small>
+<textarea name="description" class="form-control" rows="5" required></textarea>
       </div>
       <div class="col-md-4">
         <label class="form-label">Requester Name</label>
@@ -335,16 +337,18 @@ NEW_HTML = """
         <input type="email" name="requester_email" class="form-control" value="{{ session.get('user', {}).get('email','') }}">
       </div>
       <div class="col-md-4">
-        <label class="form-label">Branch</label>
-        <select name="branch" class="form-select">
+      <label class="form-label">Branch</label>
+<small class="text-muted"><i>(select option from dropdown list)</i></small>
+<select name="branch" class="form-select">
           {% for b in branches %}
             <option value="{{ b }}">{{ b }}</option>
           {% endfor %}
         </select>
       </div>
       <div class="col-md-6">
-        <label class="form-label">Category</label>
-        <select name="category" class="form-select">
+       <label class="form-label">Category</label>
+<small class="text-muted"><i>(select option from dropdown list)</i></small>
+<select name="category" class="form-select">
           {% for c in categories %}
             <option value="{{ c }}">{{ c }}</option>
           {% endfor %}
