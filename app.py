@@ -480,36 +480,43 @@ def list_tickets():
 @app.route("/new", methods=["GET", "POST"])
 @login_required
 def new_ticket():
-    with app.app_context():
-        init_db()
     if request.method == "POST":
-       data = {k: (request.form.get(k) or "").strip() for k in [
-    "title", "description", "requester_name", "requester_email", "branch", "priority", "category"
-]}
+        data = {k: (request.form.get(k) or "").strip() for k in [
+            "title", "description", "requester_name", "requester_email", "branch", "priority", "category"
+        ]}
         if not data["title"] or not data["description"]:
             flash("Title and Description are required.")
             return redirect(url_for("new_ticket"))
-        if data["priority"] not in PRIORITIES:
-            data["priority"] = "Medium"
+        ts = datetime.utcnow().isoformat()
         db = get_db()
-        ts = now_ts()
         db.execute(
-    """
-    INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
-    """,
-    (data["title"], data["description"], data["requester_name"], data["requester_email"], data["branch"], data["priority"], data["category"], ASSIGNEE_DEFAULT, ts, ts)
-)
-        get_db().commit()
-        flash("Ticket created.")
+            """
+            INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
+            """,
+            (
+                data["title"],
+                data["description"],
+                data["requester_name"],
+                data["requester_email"],
+                data["branch"],
+                data["priority"],
+                data["category"],
+                ASSIGNEE_DEFAULT,
+                ts,
+                ts
+            )
+        )
+        db.commit()
+        flash("Ticket created successfully!")
         return redirect(url_for("list_tickets"))
-    return render_template_string(
-    NEW_HTML,
-    priorities=PRIORITIES,
-    branches=BRANCHES,
-    categories=CATEGORIES
-)
 
+    return render_template_string(
+        NEW_HTML,
+        priorities=PRIORITIES,
+        branches=BRANCHES,
+        categories=CATEGORIES
+    )
 
 
 @app.route("/ticket/<int:ticket_id>")
