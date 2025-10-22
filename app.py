@@ -184,7 +184,7 @@ BASE_HTML = """
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark mb-4">
   <div class="container">
-    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">🛠️ Seegars IT Tickets</a>
+    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">Seegars IT Tickets</a>
     <div class="ms-auto d-flex align-items-center gap-2">
       {% if session.get('user') %}
         <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
