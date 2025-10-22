@@ -23,7 +23,7 @@ TENANT_ID = os.getenv("MICROSOFT_TENANT_ID")
 CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")  # e.g., https://seegarsit.onrender.com/auth/callback
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}" if TENANT_ID else None
-SCOPE = ["User.Read", "openid", "profile", "email"]
+SCOPE = ["User.Read"]
 
 # --------------------------------------------------------------------------------------
 # DB helpers
