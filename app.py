@@ -106,6 +106,22 @@ def login_required(view_func):
 # --------------------------------------------------------------------------------------
 STATUSES = ["Open", "In Progress", "Waiting", "Resolved", "Closed"]
 PRIORITIES = ["Low", "Medium", "High"]
+ASSIGNEE_DEFAULT = "Brad Wells"
+BRANCHES = [
+    "Goldsboro","Allison","Augusta","Cary","Columbia","Durham","Fayetteville",
+    "Greensboro","Greenville","Jacksonville","Metalcrafters","New Hanover",
+    "Newport","Raleigh","Rocky Mount","Spartanburg","Wayne County"
+]
+
+CATEGORIES = [
+    "Email",
+    "Network / Internet",
+    "Printer",
+    "Software (e.g., AccountMate)",
+    "Hardware (e.g., monitor)",
+    "User Access (new / existing)",
+    "Other",
+]
 
 def now_ts():
     return datetime.utcnow()
@@ -184,7 +200,7 @@ BASE_HTML = """
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark mb-4">
   <div class="container">
-    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">Seegars IT Tickets</a>
+    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">Seegars Fence Company Tickets</a>
     <div class="ms-auto d-flex align-items-center gap-2">
       {% if session.get('user') %}
         <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
@@ -287,56 +303,63 @@ INDEX_HTML = """
 NEW_HTML = """
 {% extends 'base.html' %}
 {% block content %}
-<div class=\"card p-4\">
-  <h3 class=\"mb-3\">Create Ticket</h3>
+<div class="card p-4">
+  <h3 class="mb-3">Create Ticket</h3>
   {% if not session.get('user') %}
-    <div class=\"alert alert-warning\">Please <a href=\"{{ url_for('login') }}\">sign in with Microsoft</a> to submit a ticket.</div>
+    <div class="alert alert-warning">Please <a href="{{ url_for('login') }}">sign in with Microsoft</a> to submit a ticket.</div>
   {% endif %}
-  <form method=\"post\">
-    <div class=\"row g-3\">
-      <div class=\"col-md-8\">
-        <label class=\"form-label\">Title</label>
-        <input name=\"title\" class=\"form-control\" required>
+  <form method="post">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Title</label>
+        <input name="title" class="form-control" required>
       </div>
-      <div class=\"col-md-4\">
-        <label class=\"form-label\">Priority</label>
-        <select name=\"priority\" class=\"form-select\">
-          {% for p in priorities %}<option value=\"{{p}}\">{{p}}</option>{% endfor %}
+      <div class="col-md-4">
+        <label class="form-label">Priority</label>
+        <select name="priority" class="form-select">
+          <option value="Low">Low — General request or question</option>
+          <option value="Medium">Medium — Interferes with productivity</option>
+          <option value="High">High — Stops work / critical system issue</option>
         </select>
       </div>
-      <div class=\"col-md-12\">
-        <label class=\"form-label\">Description</label>
-        <textarea name=\"description\" class=\"form-control\" rows=\"5\" required></textarea>
+      <div class="col-md-12">
+        <label class="form-label">Description</label>
+        <textarea name="description" class="form-control" rows="5" required></textarea>
       </div>
-      <div class=\"col-md-4\">
-        <label class=\"form-label\">Requester Name</label>
-        <input name=\"requester_name\" class=\"form-control\" value=\"{{ session.get('user', {}).get('name','') }}\">
+      <div class="col-md-4">
+        <label class="form-label">Requester Name</label>
+        <input name="requester_name" class="form-control" value="{{ session.get('user', {}).get('name','') }}">
       </div>
-      <div class=\"col-md-4\">
-        <label class=\"form-label\">Requester Email</label>
-        <input type=\"email\" name=\"requester_email\" class=\"form-control\" value=\"{{ session.get('user', {}).get('email','') }}\">
+      <div class="col-md-4">
+        <label class="form-label">Requester Email</label>
+        <input type="email" name="requester_email" class="form-control" value="{{ session.get('user', {}).get('email','') }}">
       </div>
-      <div class=\"col-md-4\">
-        <label class=\"form-label\">Branch</label>
-        <input name=\"branch\" class=\"form-control\" placeholder=\"e.g., Goldsboro\">
+      <div class="col-md-4">
+        <label class="form-label">Branch</label>
+        <select name="branch" class="form-select">
+          {% for b in branches %}
+            <option value="{{ b }}">{{ b }}</option>
+          {% endfor %}
+        </select>
       </div>
-      <div class=\"col-md-6\">
-        <label class=\"form-label\">Category</label>
-        <input name=\"category\" class=\"form-control\" placeholder=\"e.g., Laptop, Network, Software\">
-      </div>
-      <div class=\"col-md-6\">
-        <label class=\"form-label\">Assign To</label>
-        <input name=\"assignee\" class=\"form-control\" placeholder=\"e.g., Brad Wells\">
+      <div class="col-md-6">
+        <label class="form-label">Category</label>
+        <select name="category" class="form-select">
+          {% for c in categories %}
+            <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
       </div>
     </div>
-    <div class=\"mt-4 d-flex gap-2\">
-      <button class=\"btn btn-primary\" type=\"submit\">Create</button>
-      <a class=\"btn btn-outline-light\" href=\"{{ url_for('list_tickets') }}\">Cancel</a>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Create</button>
+      <a class="btn btn-outline-light" href="{{ url_for('list_tickets') }}">Cancel</a>
     </div>
   </form>
 </div>
 {% endblock %}
 """
+
 
 DETAIL_HTML = """
 {% extends 'base.html' %}
@@ -460,9 +483,9 @@ def new_ticket():
     with app.app_context():
         init_db()
     if request.method == "POST":
-        data = {k: (request.form.get(k) or "").strip() for k in [
-            "title", "description", "requester_name", "requester_email", "branch", "priority", "category", "assignee"
-        ]}
+       data = {k: (request.form.get(k) or "").strip() for k in [
+    "title", "description", "requester_name", "requester_email", "branch", "priority", "category"
+]}
         if not data["title"] or not data["description"]:
             flash("Title and Description are required.")
             return redirect(url_for("new_ticket"))
@@ -471,16 +494,22 @@ def new_ticket():
         db = get_db()
         ts = now_ts()
         db.execute(
-            """
-            INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
-            """,
-            (data["title"], data["description"], data["requester_name"], data["requester_email"], data["branch"], data["priority"], data["category"], data["assignee"], ts, ts)
-        )
+    """
+    INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
+    """,
+    (data["title"], data["description"], data["requester_name"], data["requester_email"], data["branch"], data["priority"], data["category"], ASSIGNEE_DEFAULT, ts, ts)
+)
         get_db().commit()
         flash("Ticket created.")
         return redirect(url_for("list_tickets"))
-    return render_template_string(NEW_HTML, priorities=PRIORITIES)
+    return render_template_string(
+    NEW_HTML,
+    priorities=PRIORITIES,
+    branches=BRANCHES,
+    categories=CATEGORIES
+)
+
 
 
 @app.route("/ticket/<int:ticket_id>")
