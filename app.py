@@ -526,22 +526,28 @@ def login():
     return redirect(auth_url)
 
 
-@app.route("/auth/callback")
+@app.route("/auth/callback", methods=["GET", "POST"])
 def auth_callback():
-    if request.args.get("state") != session.get("state"):
+    # state & code can arrive via GET (args) or POST (form)
+    state = request.values.get("state")
+    if state != session.get("state"):
         return ("State mismatch", 400)
-    code = request.args.get("code")
+
+    code = request.values.get("code")  # works for both GET and POST
     if not code:
         flash("No authorization code returned.")
         return redirect(url_for("list_tickets"))
+
     result = msal_app().acquire_token_by_authorization_code(
         code,
         scopes=SCOPE,
         redirect_uri=REDIRECT_URI,
     )
+
     if "id_token_claims" not in result:
         flash("Login failed.")
         return redirect(url_for("list_tickets"))
+
     claims = result["id_token_claims"]
     session["user"] = {
         "name": claims.get("name") or claims.get("preferred_username"),
