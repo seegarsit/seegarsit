@@ -629,25 +629,23 @@ def auth_callback():
         return redirect(url_for("list_tickets"))
 
     result = msal_app().acquire_token_by_authorization_code(
-        code,
-        scopes=SCOPE,
-        redirect_uri=REDIRECT_URI,
-    )
+    code,
+    scopes=SCOPE,
+    redirect_uri=REDIRECT_URI,
+)
 session["access_token"] = result.get("access_token")
-
-    if "id_token_claims" not in result:
-        flash("Login failed.")
-        return redirect(url_for("list_tickets"))
-
-    claims = result["id_token_claims"]
-    session["user"] = {
-        "name": claims.get("name") or claims.get("preferred_username"),
-        "email": claims.get("preferred_username"),
-        "oid": claims.get("oid"),
-    }
-    flash(f"Signed in as {session['user']['email']}")
+if "id_token_claims" not in result:
+    flash("Login failed.")
     return redirect(url_for("list_tickets"))
 
+claims = result["id_token_claims"]
+session["user"] = {
+    "name": claims.get("name") or claims.get("preferred_username"),
+    "email": claims.get("preferred_username"),
+    "oid": claims.get("oid"),
+}
+flash(f"Signed in as {session['user']['email']}")
+return redirect(url_for("list_tickets"))
 
 @app.route("/logout")
 def logout():
