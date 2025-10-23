@@ -23,7 +23,8 @@ TENANT_ID = os.getenv("MICROSOFT_TENANT_ID")
 CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")  # e.g., https://seegarsit.onrender.com/auth/callback
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}" if TENANT_ID else None
-SCOPE = ["User.Read"]
+SCOPE = ["User.Read", "Mail.Send"]
+
 
 # --------------------------------------------------------------------------------------
 # DB helpers
@@ -632,6 +633,7 @@ def auth_callback():
         scopes=SCOPE,
         redirect_uri=REDIRECT_URI,
     )
+session["access_token"] = result.get("access_token")
 
     if "id_token_claims" not in result:
         flash("Login failed.")
