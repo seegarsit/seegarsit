@@ -411,7 +411,7 @@ DETAIL_HTML = """
         <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
       </div>
       <p class=\"text-secondary\">Created {{ t['created_at'] }} • Updated {{ t['updated_at'] }}</p>
-      <p class=\"mb-3\">{{ t['description']|replace('\n','<br>')|safe }}</p>
+      <p class=\"mb-3\">{{ t['description']|replace('\\n','<br>')|safe }}</p>
 
       <div class=\"row g-3\">
         <div class=\"col-md-6\">
@@ -433,7 +433,7 @@ DETAIL_HTML = """
       {% for c in comments %}
         <div class=\"mb-3\">
           <div class=\"small text-secondary\">{{ c['created_at'] }} • {{ c['author'] or 'Anonymous' }}</div>
-          <div>{{ c['body']|replace('\n','<br>')|safe }}</div>
+          <div>{{ c['body']|replace('\\n','<br>')|safe }}</div>
         </div>
       {% else %}
         <p class=\"text-secondary\">No comments yet.</p>
@@ -464,7 +464,8 @@ DETAIL_HTML = """
       <form method=\"post\" action=\"{{ url_for('update_assignee', ticket_id=t['id']) }}\">
         <label class=\"form-label\">Assignee</label>
         <div class=\"d-flex gap-2\">
-          <input class=\"form-control\" name=\"assignee\" value=\"{{ t['assignee'] or '' }}\" placeholder=\"e.g., Brad Wells\">\n          <button class=\"btn btn-outline-light\" type=\"submit\">Save</button>
+          <input class=\"form-control\" name=\"assignee\" value=\"{{ t['assignee'] or '' }}\" placeholder=\"e.g., Brad Wells\">
+          <button class=\"btn btn-outline-light\" type=\"submit\">Save</button>
         </div>
       </form>
     </div>
