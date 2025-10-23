@@ -505,6 +505,7 @@ def home():
     return render_template_string(HOME_HTML)
 
 @app.route("/tickets")
+@login_required
 def tickets():
     with app.app_context():
         init_db()
