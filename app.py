@@ -237,14 +237,16 @@ BASE_HTML = """
   <div class="container">
     <a class="navbar-brand" href="{{ url_for('home') }}">Seegars Fence Company IT Tickets</a>
     <div class="ms-auto d-flex align-items-center gap-2">
-      {% if session.get('user') %}
-        <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
-        <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
-      {% else %}
-        <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Login with Microsoft</a>
-      {% endif %}
+  {% if request.endpoint != 'home' %}
+    {% if session.get('user') %}
+      <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
+      <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
       <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
-    </div>
+    {% else %}
+      <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Login with Microsoft</a>
+    {% endif %}
+  {% endif %}
+</div>
   </div>
 </nav>
 <main class="container">
@@ -259,7 +261,6 @@ BASE_HTML = """
 </body>
 </html>
 """
-
 
 INDEX_HTML = """
 {% extends 'base.html' %}
@@ -490,8 +491,13 @@ HOME_HTML = """
   </div>
 
   <div class="d-flex gap-2">
+  {% if session.get('user') %}
     <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
-  </div>
+  {% else %}
+    <a class="btn btn-primary" href="{{ url_for('login') }}">Sign in with Microsoft</a>
+  {% endif %}
+</div>
+
 </div>
 {% endblock %}
 """
