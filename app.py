@@ -536,7 +536,7 @@ def new_ticket():
             flash("Title and Description are required.")
             return redirect(url_for("new_ticket"))
 
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(datetime.UTC).isoformat()
         db = get_db()
         cur = db.execute(
             """
