@@ -632,11 +632,11 @@ def auth_callback():
     code,
     scopes=SCOPE,
     redirect_uri=REDIRECT_URI,
-)
-session["access_token"] = result.get("access_token")
-if "id_token_claims" not in result:
-    flash("Login failed.")
-    return redirect(url_for("list_tickets"))
+    )
+    session["access_token"] = result.get("access_token")
+    if "id_token_claims" not in result:
+        flash("Login failed.")
+        return redirect(url_for("list_tickets"))
 
 claims = result["id_token_claims"]
 session["user"] = {
