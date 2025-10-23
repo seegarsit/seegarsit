@@ -592,31 +592,31 @@ def new_ticket():
         ticket_id = cur.lastrowid
         db.commit()
 
-        # --- Email notifications (uses session['access_token']) ---
-subject_admin = f"A new ticket has been submitted by {data['requester_name'] or 'Unknown User'}"
-body_admin = f"""
-<p><strong>A new ticket has been submitted to Seegars IT.</strong></p>
-<p><strong>Submitted by:</strong> {data['requester_name']} &lt;{data['requester_email']}&gt;</p>
-<p><strong>Priority:</strong> {data['priority']}<br>
-<strong>Branch:</strong> {data['branch']}<br>
-<strong>Category:</strong> {data['category']}</p>
-<p><strong>Issue Description:</strong><br>{data['description'].replace('\n','<br>')}</p>
-"""
-send_email("brad@seegarsfence.com", subject_admin, body_admin)
+                # --- Email notifications (uses session['access_token']) ---
+        subject_admin = f"A new ticket has been submitted by {data['requester_name'] or 'Unknown User'}"
+        body_admin = f"""
+        <p><strong>A new ticket has been submitted to Seegars IT.</strong></p>
+        <p><strong>Submitted by:</strong> {data['requester_name']} &lt;{data['requester_email']}&gt;</p>
+        <p><strong>Priority:</strong> {data['priority']}<br>
+        <strong>Branch:</strong> {data['branch']}<br>
+        <strong>Category:</strong> {data['category']}</p>
+        <p><strong>Issue Description:</strong><br>{data['description'].replace('\n','<br>')}</p>
+        """
+        send_email("brad@seegarsfence.com", subject_admin, body_admin)
 
-if data["requester_email"]:
-    subject_user = "Your ticket to Seegars IT has been received"
-    body_user = f"""
-    <p>Hi {data['requester_name'] or ''},</p>
-    <p>Thank you for contacting <strong>Seegars IT</strong>. Your ticket has been received and will be reviewed soon.</p>
-    <p>It will be prioritized based on the selection you made, and you’ll receive a response as soon as possible.</p>
-    <p><strong>Summary:</strong><br>
-    Priority: {data['priority']}<br>
-    Branch: {data['branch']}<br>
-    Category: {data['category']}</p>
-    <p><em>We appreciate your patience — our goal is to keep your tech running smoothly!</em></p>
-    """
-    send_email(data["requester_email"], subject_user, body_user)
+        if data["requester_email"]:
+            subject_user = "Your ticket to Seegars IT has been received"
+            body_user = f"""
+            <p>Hi {data['requester_name'] or ''},</p>
+            <p>Thank you for contacting <strong>Seegars IT</strong>. Your ticket has been received and will be reviewed soon.</p>
+            <p>It will be prioritized based on the selection you made, and you’ll receive a response as soon as possible.</p>
+            <p><strong>Summary:</strong><br>
+            Priority: {data['priority']}<br>
+            Branch: {data['branch']}<br>
+            Category: {data['category']}</p>
+            <p><em>We appreciate your patience — our goal is to keep your tech running smoothly!</em></p>
+            """
+            send_email(data["requester_email"], subject_user, body_user)
 
         flash("Ticket created successfully!")
         return redirect(url_for("tickets"))
