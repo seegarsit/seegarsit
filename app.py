@@ -235,7 +235,7 @@ BASE_HTML = """
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark mb-4">
   <div class="container">
-    <a class="navbar-brand" href="{{ url_for('list_tickets') }}">Seegars Fence Company Tickets</a>
+    <a class="navbar-brand" href="{{ url_for('home') }}">Seegars Fence Company IT Tickets</a>
     <div class="ms-auto d-flex align-items-center gap-2">
       {% if session.get('user') %}
         <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
@@ -392,7 +392,7 @@ NEW_HTML = """
     </div>
     <div class="mt-4 d-flex gap-2">
       <button class="btn btn-primary" type="submit">Create</button>
-      <a class="btn btn-outline-light" href="{{ url_for('list_tickets') }}">Cancel</a>
+      <a class="btn btn-outline-light" href="{{ url_for('tickets') }}">Cancel</a>
     </div>
   </form>
 </div>
@@ -474,12 +474,39 @@ DETAIL_HTML = """
 {% endblock %}
 """
 
+HOME_HTML = """
+{% extends 'base.html' %}
+{% block content %}
+<div class="card p-5">
+  <h1 class="mb-2">Just Seegars IT!</h1>
+  <p class="lead text-secondary mb-4">
+    Technology support made simple for the Seegars Fence Company team.
+  </p>
+
+  <div class="mb-4">
+    <p class="mb-1">Need help with your computer, software, or network?</p>
+    <p class="mb-1">This site uses secure Microsoft 365 sign-in to make sure every request reaches the right people.</p>
+    <p class="mb-0">Click <strong>New Ticket</strong> below to sign in and tell us how we can help — we’ll handle the rest.</p>
+  </div>
+
+  <div class="d-flex gap-2">
+    <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
+    <a class="btn btn-outline-light" href="{{ url_for('tickets') }}">View Tickets</a>
+  </div>
+</div>
+{% endblock %}
+"""
+
 # --------------------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------------------
 
 @app.route("/")
-def list_tickets():
+def home():
+    return render_template_string(HOME_HTML)
+
+@app.route("/tickets")
+def tickets():
     with app.app_context():
         init_db()
     db = get_db()
@@ -733,6 +760,7 @@ def logout():
 # --------------------------------------------------------------------------------------
 app.jinja_loader = DictLoader({
     "base.html": BASE_HTML,
+    "home.html": HOME_HTML,   # ← add this line
     "index.html": INDEX_HTML,
     "new.html": NEW_HTML,
     "detail.html": DETAIL_HTML,
