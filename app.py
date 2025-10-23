@@ -626,6 +626,7 @@ def new_ticket():
 
 
 @app.route("/ticket/<int:ticket_id>")
+@login_required
 def ticket_detail(ticket_id: int):
     with app.app_context():
         init_db()
