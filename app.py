@@ -478,7 +478,7 @@ HOME_HTML = """
 {% extends 'base.html' %}
 {% block content %}
 <div class="card p-5">
-  <h1 class="mb-2">Just Seegars IT!</h1>
+  <h1 class="mb-2" style="font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;">Just Seegars IT!</h1>
   <p class="lead text-secondary mb-4">
     Technology support made simple for the Seegars Fence Company team.
   </p>
@@ -491,7 +491,6 @@ HOME_HTML = """
 
   <div class="d-flex gap-2">
     <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
-    <a class="btn btn-outline-light" href="{{ url_for('tickets') }}">View Tickets</a>
   </div>
 </div>
 {% endblock %}
