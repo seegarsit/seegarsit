@@ -9,6 +9,40 @@ from flask import Flask, g, redirect, render_template_string, request, url_for, 
 from jinja2 import DictLoader
 from msal import ConfidentialClientApplication
 import uuid
+import requests
+
+def send_email(to_addrs, subject, html_body):
+    """Send an email via Microsoft Graph using the current user's access token."""
+    token = session.get("access_token")
+    if not token:
+        # Not signed in (or token expired); skip quietly for now
+        return False
+
+    if isinstance(to_addrs, str):
+        to_addrs = [to_addrs]
+
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": html_body},
+            "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs],
+        }
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(
+            "https://graph.microsoft.com/v1.0/me/sendMail",
+            headers=headers,
+            json=payload,
+            timeout=10,
+        )
+        return resp.status_code in (200, 202)
+    except Exception:
+        return False
 
 # --------------------------------------------------------------------------------------
 # Flask app config
