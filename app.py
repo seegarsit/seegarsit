@@ -489,7 +489,14 @@ def list_tickets():
     branch = request.args.get("branch", "").strip()
     sort = request.args.get("sort", "new")
 
-    sql = "SELECT * FROM tickets WHERE 1=1"
+    sql = (
+        "SELECT id, title, description, requester_name, requester_email, "
+        "branch, priority, category, assignee, status, "
+        "CAST(created_at AS TEXT) AS created_at, "
+        "CAST(updated_at AS TEXT) AS updated_at "
+        "FROM tickets WHERE 1=1"
+    )
+
     params: list = []
     if q:
         sql += " AND (title LIKE ? OR description LIKE ? OR assignee LIKE ?)"
