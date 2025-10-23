@@ -613,7 +613,7 @@ def new_ticket():
             send_email(data["requester_email"], subject_user, body_user)
 
         flash("Ticket created successfully!")
-        return redirect(url_for("list_tickets"))
+        return redirect(url_for("tickets"))
 
     # GET request: show the form
     return render_template_string(
@@ -632,7 +632,7 @@ def ticket_detail(ticket_id: int):
     t = db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     if not t:
         flash("Ticket not found.")
-        return redirect(url_for("list_tickets"))
+        return redirect(url_for("tickets"))
     comments = db.execute(
         "SELECT * FROM comments WHERE ticket_id = ? ORDER BY created_at ASC",
         (ticket_id,)
@@ -703,7 +703,7 @@ def login():
     # If env vars not set, show a friendly error
     if not (CLIENT_ID and CLIENT_SECRET and AUTHORITY and REDIRECT_URI):
         flash("Microsoft login not configured. Set env vars on Render.")
-        return redirect(url_for("list_tickets"))
+        return redirect(url_for("tickets"))  # changed here
     state = str(uuid.uuid4())
     session["state"] = state
     auth_url = msal_app().get_authorization_request_url(
@@ -726,7 +726,7 @@ def auth_callback():
     code = request.values.get("code")  # works for both GET and POST
     if not code:
         flash("No authorization code returned.")
-        return redirect(url_for("list_tickets"))
+        return redirect(url_for("tickets"))  # changed here
 
     result = msal_app().acquire_token_by_authorization_code(
         code,
@@ -737,7 +737,7 @@ def auth_callback():
 
     if "id_token_claims" not in result:
         flash("Login failed.")
-        return redirect(url_for("list_tickets"))
+        return redirect(url_for("tickets"))  # changed here too
 
     claims = result["id_token_claims"]
     session["user"] = {
@@ -746,13 +746,14 @@ def auth_callback():
         "oid": claims.get("oid"),
     }
     flash(f"Signed in as {session['user']['email']}")
-    return redirect(url_for("list_tickets"))
+    return redirect(url_for("tickets"))  # and this one too
+
 
 @app.route("/logout")
 def logout():
     session.clear()
     flash("Signed out.")
-    return redirect(url_for("list_tickets"))
+    return redirect(url_for("tickets"))
 
 # --------------------------------------------------------------------------------------
 # Jinja loader (since we keep templates inline in this single file)
