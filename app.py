@@ -651,8 +651,8 @@ def auth_callback():
 @app.route("/logout")
 def logout():
     session.clear()
-        flash("Signed out.")
-        return redirect(url_for("list_tickets"))
+    flash("Signed out.")
+    return redirect(url_for("list_tickets"))
 
 # --------------------------------------------------------------------------------------
 # Jinja loader (since we keep templates inline in this single file)
