@@ -528,27 +528,57 @@ def new_ticket():
             return redirect(url_for("new_ticket"))
         ts = datetime.utcnow().isoformat()
         db = get_db()
-        db.execute(
-            """
-            INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
-            """,
-            (
-                data["title"],
-                data["description"],
-                data["requester_name"],
-                data["requester_email"],
-                data["branch"],
-                data["priority"],
-                data["category"],
-                ASSIGNEE_DEFAULT,
-                ts,
-                ts
-            )
-        )
-        db.commit()
-        flash("Ticket created successfully!")
-        return redirect(url_for("list_tickets"))
+cur = db.execute(
+    """
+    INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
+    """,
+    (
+        data["title"],
+        data["description"],
+        data["requester_name"],
+        data["requester_email"],
+        data["branch"],
+        data["priority"],
+        data["category"],
+        ASSIGNEE_DEFAULT,
+        ts,
+        ts
+    )
+)
+ticket_id = cur.lastrowid
+db.commit()
+
+# --- Email notifications (uses session['access_token']) ---
+subject_admin = f"[Ticket #{ticket_id}] {data['title']}"
+body_admin = f"""
+<p><b>New ticket created</b></p>
+<p><b>Title:</b> {data['title']}<br>
+<b>Priority:</b> {data['priority']}<br>
+<b>Branch:</b> {data['branch']}<br>
+<b>Category:</b> {data['category']}<br>
+<b>Requester:</b> {data['requester_name']} &lt;{data['requester_email']}&gt;</p>
+<p><b>Description:</b><br>{data['description'].replace('\n','<br>')}</p>
+"""
+
+send_email("brad@seegarsfence.com", subject_admin, body_admin)
+
+if data["requester_email"]:
+    subject_user = f"We received your ticket #{ticket_id}: {data['title']}"
+    body_user = f"""
+    <p>Hi {data['requester_name'] or ''},</p>
+    <p>Your ticket has been received by Seegars IT. We’ll follow up soon.</p>
+    <p><b>Summary</b><br>
+    <b>Priority:</b> {data['priority']}<br>
+    <b>Branch:</b> {data['branch']}<br>
+    <b>Category:</b> {data['category']}</p>
+    <p><b>Description:</b><br>{data['description'].replace('\n','<br>')}</p>
+    """
+    send_email(data["requester_email"], subject_user, body_user)
+
+flash("Ticket created successfully!")
+return redirect(url_for("list_tickets"))
+
 
     return render_template_string(
         NEW_HTML,
