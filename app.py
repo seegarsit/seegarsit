@@ -165,6 +165,18 @@ STATUSES = ["Open", "In Progress", "Waiting", "Resolved", "Closed"]
 COMPLETED_STATUSES = {"Resolved", "Closed"}
 PRIORITIES = ["Low", "Medium", "High"]
 ASSIGNEE_DEFAULT = "Brad Wells"
+STATUS_BADGES = {
+    "Open": {"cls": "badge-chip badge-open", "icon": "bi bi-lightning-charge"},
+    "In Progress": {"cls": "badge-chip badge-progress", "icon": "bi bi-arrow-repeat"},
+    "Waiting": {"cls": "badge-chip badge-waiting", "icon": "bi bi-hourglass-split"},
+    "Resolved": {"cls": "badge-chip badge-complete", "icon": "bi bi-check-circle"},
+    "Closed": {"cls": "badge-chip badge-closed", "icon": "bi bi-check2-all"},
+}
+PRIORITY_BADGES = {
+    "High": {"cls": "badge-chip priority-high", "icon": "bi bi-exclamation-octagon"},
+    "Medium": {"cls": "badge-chip priority-medium", "icon": "bi bi-activity"},
+    "Low": {"cls": "badge-chip priority-low", "icon": "bi bi-arrow-down"},
+}
 BRANCHES = [
     "Goldsboro","Allison","Augusta","Cary","Columbia","Durham","Fayetteville",
     "Greensboro","Greenville","Jacksonville","Metalcrafters","New Hanover",
@@ -230,253 +242,694 @@ BASE_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Seegars IT Tickets</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Brand font (fallbacks if CoFo Gothic isn’t available) -->
-  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    :root{
-      --sg-black:#231F20;
-      --sg-green:#008752;
-      --sg-lime:#BCD531;
-      --sg-gray:#DEE0D9;
-      --sg-offwhite:#F5F6F4;
+    :root {
+      --sg-black: #231F20;
+      --sg-green: #008752;
+      --sg-green-dark: #006e43;
+      --sg-lime: #BCD531;
+      --sg-gray: #DEE0D9;
+      --sg-offwhite: #F5F6F4;
+      --sg-surface: #ffffff;
+      --sg-shadow: 0 18px 35px rgba(0, 0, 0, 0.08);
     }
-    html,body{ height:100%; }
-    body{
-      background:var(--sg-offwhite);
-      color:var(--sg-black);
-      font-family:"CoFo Gothic","Open Sans","Segoe UI","Helvetica Neue",Arial,sans-serif;
-      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      background: radial-gradient(circle at top, rgba(188,213,49,.12), transparent 55%), var(--sg-offwhite);
+      color: var(--sg-black);
+      font-family: "Outfit", "Open Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-    .navbar{
-      background:var(--sg-black)!important;
-      border-bottom:4px solid var(--sg-green);
+
+    body.has-shell {
+      display: flex;
+      flex-direction: column;
     }
-    .navbar .navbar-brand{
-      font-weight:700; letter-spacing:.2px;
-      color:#fff!important;
+
+    a { color: var(--sg-green); text-decoration: none; }
+    a:hover { color: var(--sg-green-dark); }
+
+    .app-shell {
+      display: flex;
+      flex: 1;
+      min-height: 100vh;
     }
-    .navbar .btn-primary{
-      background:var(--sg-green); border-color:var(--sg-green);
+
+    .app-header {
+      background: linear-gradient(135deg, var(--sg-black), #171819);
+      color: #fff;
+      padding: 0.85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 4px solid var(--sg-green);
+      position: sticky;
+      top: 0;
+      z-index: 1020;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
     }
-    .navbar .btn-primary:hover{
-      background:#006e43; border-color:#006e43;
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      font-size: 1.15rem;
     }
-    .card{
-      background:#fff; border:1px solid var(--sg-gray);
-      box-shadow:0 6px 18px rgba(0,0,0,.035);
+
+    .brand-icon {
+      height: 40px;
+      width: 40px;
+      border-radius: 12px;
+      background: radial-gradient(circle at top, rgba(188,213,49,0.45), rgba(0,135,82,0.9));
+      display: grid;
+      place-items: center;
+      font-size: 1.35rem;
     }
-    .form-control, .form-select{
-      background:#fff; color:var(--sg-black); border-color:var(--sg-gray);
+
+    .app-user-meta {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.875rem;
     }
-    .form-control:focus, .form-select:focus{
-      border-color:var(--sg-green);
-      box-shadow:0 0 0 .2rem rgba(0,135,82,.15);
+
+    .app-user-meta .btn {
+      border-radius: 999px;
+      padding-inline: 1.1rem;
     }
-    a{ color:var(--sg-green); text-decoration:none; }
-    a:hover{ color:#006e43; }
-    .btn-primary{
-      background:var(--sg-green); border-color:var(--sg-green);
+
+    .app-sidebar {
+      width: 240px;
+      background: rgba(35, 31, 32, 0.92);
+      color: rgba(255, 255, 255, 0.82);
+      padding: 1.5rem 1.25rem 2.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+      position: sticky;
+      top: 72px;
+      height: calc(100vh - 72px);
+      overflow-y: auto;
     }
-    .btn-primary:hover{
-      background:#006e43; border-color:#006e43;
+
+    .nav-section-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgba(255, 255, 255, 0.52);
+      margin-bottom: 0.75rem;
     }
-    .btn-outline-light{
-      color:var(--sg-black); border-color:var(--sg-black);
+
+    .nav-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.65rem 0.85rem;
+      border-radius: 12px;
+      color: inherit;
+      transition: background 0.2s ease, transform 0.2s ease;
     }
-    .badge.text-bg-danger{ background:#c53030!important; }
-    .badge.text-bg-warning{ background:var(--sg-lime)!important; color:#1b1b1b; }
-    .badge.text-bg-primary{ background:var(--sg-green)!important; }
-    .table > :not(caption) > * > * { background: transparent; }
-    .text-secondary{ color:#676a6d!important; }
+
+    .nav-pill:hover {
+      background: rgba(188, 213, 49, 0.12);
+      transform: translateX(4px);
+      color: #fff;
+    }
+
+    .nav-pill.active {
+      background: linear-gradient(135deg, rgba(0,135,82,0.9), rgba(188,213,49,0.65));
+      color: #fff;
+      box-shadow: 0 12px 18px rgba(0, 135, 82, 0.25);
+    }
+
+    .app-content {
+      flex: 1;
+      padding: 2rem clamp(1.25rem, 1.5vw + 1rem, 2.75rem);
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .surface-card {
+      background: var(--sg-surface);
+      border-radius: 18px;
+      border: 1px solid rgba(35, 31, 32, 0.06);
+      box-shadow: var(--sg-shadow);
+    }
+
+    .stat-card {
+      position: relative;
+      overflow: hidden;
+      padding: 1.5rem;
+    }
+
+    .stat-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -40% -50% auto;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(188,213,49,0.25), transparent 65%);
+      transform: rotate(25deg);
+    }
+
+    .stat-card .stat-kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 0.75rem;
+      color: rgba(35, 31, 32, 0.58);
+      margin-bottom: 0.35rem;
+    }
+
+    .stat-card .stat-value {
+      font-size: clamp(2.2rem, 2.5vw + 1rem, 3.4rem);
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .badge-chip {
+      border-radius: 999px;
+      padding: 0.35rem 0.85rem;
+      font-weight: 600;
+      font-size: 0.75rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-chip i { font-size: 0.9rem; }
+
+    .priority-high { background: rgba(197,48,48,0.2); color: #8f1e1e; }
+    .priority-medium { background: rgba(188,213,49,0.28); color: #4d4f12; }
+    .priority-low { background: rgba(35,31,32,0.12); color: var(--sg-black); }
+
+    .badge-open { background: rgba(0,135,82,0.12); color: var(--sg-green); }
+    .badge-progress { background: rgba(188,213,49,0.15); color: #505115; }
+    .badge-waiting { background: rgba(255,193,7,0.18); color: #8a6d00; }
+    .badge-complete { background: rgba(0,135,82,0.2); color: var(--sg-green); }
+    .badge-closed { background: rgba(35,31,32,0.12); color: var(--sg-black); }
+
+    .filter-panel {
+      background: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(12px);
+      border-radius: 20px;
+      border: 1px solid rgba(35,31,32,0.08);
+      padding: 1.5rem;
+      box-shadow: var(--sg-shadow);
+    }
+
+    .filter-pill {
+      border-radius: 30px;
+      border: 1px solid rgba(0,135,82,0.35);
+      padding: 0.45rem 0.9rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.85rem;
+      margin: 0.25rem 0.3rem 0 0;
+    }
+
+    .table-modern {
+      border-collapse: separate;
+      border-spacing: 0 0.75rem;
+    }
+
+    .table-modern thead th {
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      color: rgba(35,31,32,0.55);
+      border: none;
+    }
+
+    .table-modern tbody tr {
+      box-shadow: var(--sg-shadow);
+      border-radius: 18px;
+    }
+
+    .table-modern tbody td {
+      background: var(--sg-surface);
+      border: none;
+      vertical-align: middle;
+      padding: 1.1rem;
+    }
+
+    .table-modern tbody tr td:first-child { border-top-left-radius: 18px; border-bottom-left-radius: 18px; }
+    .table-modern tbody tr td:last-child { border-top-right-radius: 18px; border-bottom-right-radius: 18px; }
+
+    .ticket-title {
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .ticket-meta {
+      color: rgba(35,31,32,0.6);
+      font-size: 0.82rem;
+    }
+
+    .timeline {
+      position: relative;
+      padding-left: 1.5rem;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0.4rem;
+      top: 0.1rem;
+      bottom: 0.1rem;
+      width: 2px;
+      background: linear-gradient(180deg, rgba(0,135,82,0.8), rgba(188,213,49,0.2));
+    }
+
+    .timeline-entry {
+      position: relative;
+      padding: 0.75rem 0 0.75rem 1.5rem;
+    }
+
+    .timeline-entry::before {
+      content: "";
+      position: absolute;
+      left: -0.02rem;
+      top: 1rem;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--sg-green);
+      box-shadow: 0 0 0 6px rgba(0,135,82,0.15);
+    }
+
+    .btn-primary {
+      background: var(--sg-green);
+      border-color: var(--sg-green);
+      border-radius: 999px;
+      font-weight: 600;
+      padding-inline: 1.3rem;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .btn-primary:hover {
+      background: var(--sg-green-dark);
+      border-color: var(--sg-green-dark);
+      transform: translateY(-1px);
+      box-shadow: 0 12px 18px rgba(0, 135, 82, 0.25);
+    }
+
+    .btn-outline-light {
+      border-radius: 999px;
+    }
+
+    .form-control, .form-select {
+      border-radius: 14px;
+      border: 1px solid rgba(35,31,32,0.12);
+      padding: 0.65rem 0.95rem;
+      background: #fff;
+    }
+
+    .form-control:focus, .form-select:focus {
+      border-color: rgba(0,135,82,0.65);
+      box-shadow: 0 0 0 .25rem rgba(0,135,82,0.15);
+    }
+
+    .flash-message {
+      border-radius: 16px;
+      padding: 0.9rem 1.1rem;
+      background: rgba(188,213,49,0.25);
+      color: var(--sg-black);
+      border: 1px solid rgba(188,213,49,0.45);
+      font-weight: 500;
+    }
+
+    .skeleton {
+      background: linear-gradient(90deg, rgba(220,224,217,0.4), rgba(220,224,217,0.75), rgba(220,224,217,0.4));
+      background-size: 200% 100%;
+      animation: shimmer 1.8s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { background-position: -150% 0; }
+      100% { background-position: 150% 0; }
+    }
+
+    @media (max-width: 991px) {
+      .app-shell { flex-direction: column; }
+      .app-sidebar {
+        width: 100%;
+        height: auto;
+        position: static;
+        border-radius: 0 0 20px 20px;
+        background: rgba(35,31,32,0.96);
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+      }
+      .nav-pill { flex: 1 1 45%; }
+      .app-content { padding-top: 1.5rem; }
+    }
+
+    @media (max-width: 575px) {
+      .app-header { flex-direction: column; gap: 0.75rem; align-items: flex-start; }
+      .app-user-meta { width: 100%; justify-content: space-between; }
+    }
   </style>
 </head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark mb-4">
-  <div class="container">
-    <a class="navbar-brand" href="{{ url_for('home') }}">Seegars Fence Company IT Tickets</a>
-    <div class="ms-auto d-flex align-items-center gap-2">
-  {% if request.endpoint != 'home' %}
-    {% if session.get('user') %}
-      <span class="small text-secondary">Signed in as {{ session['user']['name'] or session['user']['email'] }}</span>
-      <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
-      <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
-    {% else %}
-      <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Login with Microsoft</a>
-    {% endif %}
-  {% endif %}
-</div>
+<body class="{% if request.endpoint != 'home' %}has-shell{% endif %}">
+{% if request.endpoint != 'home' %}
+  <header class="app-header">
+    <a class="brand-mark text-white" href="{{ url_for('tickets') }}">
+      <span class="brand-icon"><i class="bi bi-stars"></i></span>
+      <span>Seegars IT Workspace</span>
+    </a>
+    <div class="app-user-meta">
+      {% if session.get('user') %}
+        <div class="text-white-50">Signed in as <strong>{{ session['user']['name'] or session['user']['email'] }}</strong></div>
+        <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-lg me-1"></i>New Ticket</a>
+      {% else %}
+        <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Login with Microsoft</a>
+      {% endif %}
+    </div>
+  </header>
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <div>
+        <div class="nav-section-title">Workspace</div>
+        <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
+        <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
+        <a class="nav-pill disabled" href="#" onclick="return false;"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
+      </div>
+      <div>
+        <div class="nav-section-title">Shortcuts</div>
+        <div class="filter-pill"><i class="bi bi-funnel"></i>Saved Views</div>
+        <div class="filter-pill"><i class="bi bi-lightning"></i>Automation Rules</div>
+      </div>
+    </aside>
+    <main class="app-content">
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="flash-message">{{ messages|join('\n') }}</div>
+        {% endif %}
+      {% endwith %}
+      {% block workspace_content %}{% endblock %}
+    </main>
   </div>
-</nav>
-<main class="container">
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <div class="alert alert-info">{{ messages|join('\\n') }}</div>
-    {% endif %}
-  {% endwith %}
-  {% block content %}{% endblock %}
-</main>
+{% else %}
+  <main class="container py-5">
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash-message mb-4">{{ messages|join('\n') }}</div>
+      {% endif %}
+    {% endwith %}
+    {% block home_content %}{% endblock %}
+  </main>
+{% endif %}
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
 
+
 DASHBOARD_HTML = """
 {% extends 'base.html' %}
-{% block content %}
-<div class=\"row g-3 mb-4\">
-  <div class=\"col-md-4 col-lg-3\">
-    <div class=\"card p-3 h-100\">
-      <div class=\"text-uppercase small text-secondary mb-1\">Total Tickets{% if admin %} (All Users){% endif %}</div>
-      <div class=\"display-6 fw-bold\">{{ stats.total }}</div>
+{% block workspace_content %}
+<section class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+  <div>
+    <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-broadcast-pin"></i> Live Queue</span>
+    <h1 class="fw-semibold display-5 mb-2">Support Command Center</h1>
+    <p class="text-secondary mb-0">Monitor ticket health, triage new issues, and keep Seegars teams moving.</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <button type="button" class="btn btn-outline-dark d-flex align-items-center gap-2"><i class="bi bi-bookmark-star"></i>Save View</button>
+    <a class="btn btn-primary d-flex align-items-center gap-2" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-lg"></i>New Ticket</a>
+  </div>
+</section>
+
+<div class="row g-3">
+  <div class="col-md-4 col-xl-3">
+    <div class="surface-card stat-card h-100">
+      <div class="stat-kicker">Total Volume{% if admin %} · All Users{% endif %}</div>
+      <p class="stat-value">{{ stats.total }}</p>
+      <div class="text-secondary d-flex align-items-center gap-2"><i class="bi bi-people"></i><span>Requests captured</span></div>
     </div>
   </div>
-  <div class=\"col-md-4 col-lg-3\">
-    <div class=\"card p-3 h-100\">
-      <div class=\"text-uppercase small text-secondary mb-1\">Open Tickets</div>
-      <div class=\"display-6 fw-bold text-warning\">{{ stats.open }}</div>
+  <div class="col-md-4 col-xl-3">
+    <div class="surface-card stat-card h-100">
+      <div class="stat-kicker">Open Tickets</div>
+      <p class="stat-value text-warning mb-1">{{ stats.open }}</p>
+      <div class="text-secondary d-flex align-items-center gap-2"><i class="bi bi-activity"></i><span>Awaiting resolution</span></div>
     </div>
   </div>
-  <div class=\"col-md-4 col-lg-3\">
-    <div class=\"card p-3 h-100\">
-      <div class=\"text-uppercase small text-secondary mb-1\">Completed Tickets</div>
-      <div class=\"display-6 fw-bold text-success\">{{ stats.completed }}</div>
+  <div class="col-md-4 col-xl-3">
+    <div class="surface-card stat-card h-100">
+      <div class="stat-kicker">Completed</div>
+      <p class="stat-value text-success mb-1">{{ stats.completed }}</p>
+      <div class="text-secondary d-flex align-items-center gap-2"><i class="bi bi-check2-circle"></i><span>Resolved or closed</span></div>
     </div>
   </div>
-  <div class=\"col-lg-3\">
-    <div class=\"card p-3 h-100\">
-      <div class=\"text-uppercase small text-secondary mb-2\">Tickets by Category</div>
-      <div class=\"d-flex flex-column gap-2\">
+  <div class="col-12 col-xl-3">
+    <div class="surface-card p-4 h-100">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h6 class="mb-0 text-uppercase small text-secondary">Top Categories</h6>
+        <span class="badge-chip badge-closed"><i class="bi bi-pie-chart"></i>Mix</span>
+      </div>
+      <div class="d-flex flex-column gap-2">
         {% for item in category_stats %}
-        <div class=\"d-flex justify-content-between\">
-          <span class=\"fw-semibold\">{{ item.category }}</span>
-          <span class=\"text-secondary\">{{ item.count }}</span>
-        </div>
+          <div class="d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">{{ item.category }}</span>
+            <span class="text-secondary">{{ item.count }}</span>
+          </div>
         {% else %}
-        <div class=\"text-secondary\">No tickets yet.</div>
+          <div class="text-secondary">No tickets yet.</div>
         {% endfor %}
       </div>
     </div>
   </div>
 </div>
 
-<div class=\"card p-0\">
-  <div class=\"table-responsive\">
-    <table class=\"table align-middle mb-0\">
-      <thead>
-        <tr>
-          <th>Date Submitted</th>
-          {% if admin %}<th>Branch</th>{% endif %}
-          <th>Title</th>
-          <th>Priority</th>
-          <th>Category</th>
-          <th>Status</th>
-          <th>Date Completed</th>
-          {% if admin %}<th class=\"text-end\">Manage</th>{% endif %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in tickets %}
-        <tr>
-          <td>{{ format_ts(t['created_at']) }}</td>
-          {% if admin %}
-          <td>{{ t['branch'] or '—' }}</td>
-          {% endif %}
-          <td>
-            <div class=\"fw-semibold\">{{ t['title'] }}</div>
-            <div class=\"small text-secondary\">#{{ t['id'] }}{% if admin and t['requester_name'] %} • {{ t['requester_name'] }}{% endif %}</div>
-          </td>
-          <td>
-            <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
-          </td>
-          <td>{{ t['category'] or '—' }}</td>
-          <td>
-            <span class=\"badge text-bg-{% if t['status'] in ['Open','In Progress'] %}primary{% elif t['status']=='Waiting' %}warning{% elif t['status']=='Resolved' %}success{% else %}secondary{% endif %}\">{{ t['status'] }}</span>
-          </td>
-          <td>{{ format_ts(t['completed_at']) }}</td>
-          {% if admin %}
-          <td class=\"text-end\">
-            <form class=\"d-flex gap-2 justify-content-end flex-wrap\" method=\"post\" action=\"{{ url_for('update_status', ticket_id=t['id']) }}\">
-              <select name=\"status\" class=\"form-select form-select-sm\" style=\"min-width:140px\">
-                {% for s in statuses %}
-                <option value=\"{{ s }}\" {% if s == t['status'] %}selected{% endif %}>{{ s }}</option>
-                {% endfor %}
-              </select>
-              <button class=\"btn btn-sm btn-primary\" type=\"submit\">Update</button>
-              <a class=\"btn btn-sm btn-outline-light\" href=\"{{ url_for('ticket_detail', ticket_id=t['id']) }}\">Details</a>
-            </form>
-          </td>
-          {% endif %}
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan=\"{% if admin %}8{% else %}7{% endif %}\" class=\"text-center py-4\">No tickets yet.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="row g-4 align-items-start">
+  <div class="col-lg-4 col-xl-3">
+    <div class="filter-panel">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="mb-0">Quick Filters</h5>
+        <button type="button" class="btn btn-sm btn-outline-dark">Reset</button>
+      </div>
+      <form class="d-flex flex-column gap-3">
+        <div>
+          <label class="form-label small text-uppercase">Search tickets</label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+            <input type="search" class="form-control border-start-0" placeholder="Search by title or #" disabled>
+          </div>
+        </div>
+        <div>
+          <label class="form-label small text-uppercase">Status</label>
+          <div class="d-flex flex-wrap gap-2">
+            {% for s in statuses %}
+              <span class="filter-pill"><i class="bi bi-circle-fill" style="font-size:0.55rem;"></i>{{ s }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        <div>
+          <label class="form-label small text-uppercase">Priority</label>
+          <div class="d-flex flex-wrap gap-2">
+            {% for p in priorities %}
+              <span class="filter-pill"><i class="bi bi-sliders"></i>{{ p }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% if admin %}
+        <div>
+          <label class="form-label small text-uppercase">Branch</label>
+          <div class="d-flex flex-wrap gap-2">
+            {% for b in branches[:6] %}
+              <span class="filter-pill"><i class="bi bi-geo"></i>{{ b }}</span>
+            {% endfor %}
+            {% if branches|length > 6 %}
+              <span class="filter-pill"><i class="bi bi-three-dots"></i>More</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+        <div class="text-secondary small">Interactive filtering coming soon — adjust presets above and save your favourite view.</div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-8 col-xl-9">
+    <div class="surface-card p-0 overflow-hidden">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-4 border-bottom border-light-subtle">
+        <div class="d-flex align-items-center gap-3">
+          <div class="badge-chip badge-open"><i class="bi bi-lightning"></i>{{ tickets|length }} Results</div>
+          <span class="text-secondary small">Sorted by most recent updates</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-dark d-flex align-items-center gap-2"><i class="bi bi-cloud-download"></i>Export</button>
+      </div>
+      <div class="table-responsive p-3">
+        <table class="table table-modern align-middle mb-0">
+          <thead>
+            <tr>
+              <th scope="col">Submitted</th>
+              {% if admin %}<th scope="col">Branch</th>{% endif %}
+              <th scope="col">Ticket</th>
+              <th scope="col">Priority</th>
+              <th scope="col">Category</th>
+              <th scope="col">Status</th>
+              <th scope="col">Completed</th>
+              {% if admin %}<th scope="col" class="text-end">Actions</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in tickets %}
+            {% set status = t['status'] or 'Open' %}
+            {% set status_style = status_badges.get(status, status_badges['Open']) %}
+            {% set priority_label = (t['priority'] or 'Medium') %}
+            {% set priority_style = priority_badges.get(priority_label, priority_badges['Medium']) %}
+            <tr>
+              <td><div class="fw-semibold">{{ format_ts(t['created_at']) }}</div><div class="ticket-meta">Updated {{ format_ts(t['updated_at']) }}</div></td>
+              {% if admin %}
+              <td><span class="ticket-title">{{ t['branch'] or '—' }}</span><div class="ticket-meta">{{ t['requester_name'] or 'Unknown' }}</div></td>
+              {% endif %}
+              <td>
+                <div class="ticket-title">{{ t['title'] }}</div>
+                <div class="ticket-meta">#{{ t['id'] }}{% if not admin and t['branch'] %} • {{ t['branch'] }}{% endif %}{% if admin and t['requester_email'] %} • {{ t['requester_email'] }}{% endif %}</div>
+              </td>
+              <td>
+                <span class="{{ priority_style.cls }}"><i class="{{ priority_style.icon }}"></i>{{ priority_label }}</span>
+              </td>
+              <td>{{ t['category'] or '—' }}</td>
+              <td>
+                <span class="{{ status_style.cls }}"><i class="{{ status_style.icon }}"></i>{{ status }}</span>
+              </td>
+              <td>{{ format_ts(t['completed_at']) }}</td>
+              {% if admin %}
+              <td class="text-end">
+                <form class="d-flex flex-wrap gap-2 justify-content-end align-items-center" method="post" action="{{ url_for('update_status', ticket_id=t['id']) }}">
+                  <select name="status" class="form-select form-select-sm" style="min-width: 160px;">
+                    {% for s in statuses %}
+                    <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-arrow-repeat"></i></button>
+                  <a class="btn btn-sm btn-outline-dark" href="{{ url_for('ticket_detail', ticket_id=t['id']) }}">Details</a>
+                </form>
+              </td>
+              {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="{% if admin %}8{% else %}7{% endif %}" class="text-center py-5">
+                <div class="fw-semibold mb-2">No tickets yet</div>
+                <p class="text-secondary mb-0">Create your first request to populate the workspace.</p>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
 """
 
+
 NEW_HTML = """
 {% extends 'base.html' %}
-{% block content %}
-<div class="card p-4">
-  <h3 class="mb-3">Create Ticket</h3>
+{% block workspace_content %}
+<div class="surface-card p-4 p-lg-5">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+    <div>
+      <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-pencil"></i> Guided form</span>
+      <h2 class="fw-semibold mb-2">Submit a Support Ticket</h2>
+      <p class="text-secondary mb-0">Tell us what’s happening and we’ll route it to the Seegars IT team instantly.</p>
+    </div>
+    <div class="d-flex align-items-center gap-2 text-secondary small">
+      <i class="bi bi-shield-lock-fill text-success"></i>
+      <span>Microsoft 365 secure workspace</span>
+    </div>
+  </div>
+
   {% if not session.get('user') %}
-    <div class="alert alert-warning">Please <a href="{{ url_for('login') }}">sign in with Microsoft</a> to submit a ticket.</div>
+    <div class="alert alert-warning d-flex align-items-center gap-2"><i class="bi bi-info-circle"></i><span>Please <a href="{{ url_for('login') }}" class="fw-semibold">sign in with Microsoft</a> to submit a ticket.</span></div>
   {% endif %}
-  <form method="post">
-    <div class="row g-3">
-      <div class="col-md-8">
-        <label class="form-label">Title</label>
-        <input name="title" class="form-control" required>
+
+  <div class="d-flex flex-wrap gap-2 mb-4">
+    <span class="filter-pill"><i class="bi bi-1-circle"></i>Describe issue</span>
+    <span class="filter-pill"><i class="bi bi-2-circle"></i>Contact & location</span>
+    <span class="filter-pill"><i class="bi bi-3-circle"></i>Review & submit</span>
+  </div>
+
+  <form method="post" class="d-flex flex-column gap-4">
+    <div class="row g-4">
+      <div class="col-lg-8">
+        <div class="d-flex flex-column gap-3">
+          <div>
+            <label class="form-label fw-semibold">Title</label>
+            <input name="title" class="form-control" placeholder="Example: AccountMate won’t open" required>
+          </div>
+          <div>
+            <label class="form-label fw-semibold">What’s happening?</label>
+            <textarea name="description" class="form-control" rows="6" placeholder="Share clear details, steps, and any error messages." required></textarea>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Your name</label>
+              <input name="requester_name" class="form-control" placeholder="First and last name">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Email</label>
+              <input type="email" name="requester_email" class="form-control" placeholder="you@seegarsfence.com">
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="col-md-4">
-        <label class="form-label">Priority</label>
-<small class="text-muted"><i>(select option from dropdown list)</i></small>
-<select name="priority" class="form-select">
-          <option value="Low">Low — General request or question</option>
-          <option value="Medium">Medium — Interferes with productivity</option>
-          <option value="High">High — Stops work / critical system issue</option>
-        </select>
-      </div>
-      <div class="col-md-12">
-       <label class="form-label">Description</label>
-<small class="text-muted"><i>(include as many details as possible)</i></small>
-<textarea name="description" class="form-control" rows="5" required></textarea>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Requester Name</label>
-        <input name="requester_name" class="form-control" value="{{ session.get('user', {}).get('name','') }}">
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Requester Email</label>
-        <input type="email" name="requester_email" class="form-control" value="{{ session.get('user', {}).get('email','') }}">
-      </div>
-      <div class="col-md-4">
-      <label class="form-label">Branch</label>
-<small class="text-muted"><i>(select option from dropdown list)</i></small>
-<select name="branch" class="form-select">
-          {% for b in branches %}
-            <option value="{{ b }}">{{ b }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-6">
-       <label class="form-label">Category</label>
-<small class="text-muted"><i>(select option from dropdown list)</i></small>
-<select name="category" class="form-select">
-          {% for c in categories %}
-            <option value="{{ c }}">{{ c }}</option>
-          {% endfor %}
-        </select>
+      <div class="col-lg-4">
+        <div class="surface-card p-3 p-lg-4">
+          <h5 class="fw-semibold mb-3">Triage details</h5>
+          <div class="mb-3">
+            <label class="form-label text-uppercase small">Priority</label>
+            <select name="priority" class="form-select">
+              {% for option in priorities %}
+              <option value="{{ option }}" {% if option == 'Medium' %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-uppercase small">Branch</label>
+            <select name="branch" class="form-select">
+              <option value="">Select a branch…</option>
+              {% for branch in branches %}
+              <option value="{{ branch }}">{{ branch }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-uppercase small">Category</label>
+            <select name="category" class="form-select">
+              <option value="">Choose a category…</option>
+              {% for cat in categories %}
+              <option value="{{ cat }}">{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="small text-secondary d-flex gap-2">
+            <i class="bi bi-paperclip"></i>
+            <span>Attachments and screenshots can be emailed to <strong>helpdesk@seegarsfence.com</strong>.</span>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="mt-4 d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Create</button>
-      <a class="btn btn-outline-light" href="{{ url_for('tickets') }}">Cancel</a>
+    <div class="d-flex flex-wrap gap-3 justify-content-end">
+      <a class="btn btn-outline-dark" href="{{ url_for('tickets') }}">Cancel</a>
+      <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-send"></i>Submit ticket</button>
     </div>
   </form>
 </div>
@@ -484,80 +937,120 @@ NEW_HTML = """
 """
 
 
+
+
 DETAIL_HTML = """
 {% extends 'base.html' %}
-{% block content %}
-<div class=\"row g-3\">
-  <div class=\"col-lg-8\">
-    <div class=\"card p-4\">
-      <div class=\"d-flex justify-content-between align-items-start\">
-        <h3 class=\"mb-1\">#{{ t['id'] }} – {{ t['title'] }}</h3>
-        <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
-      </div>
-      <p class=\"text-secondary\">
-        Created {{ format_ts(t['created_at']) }} • Updated {{ format_ts(t['updated_at']) }}
-        {% if t['completed_at'] %}• Completed {{ format_ts(t['completed_at']) }}{% endif %}
-      </p>
-      <p class=\"mb-3\">{{ t['description']|replace('\\n','<br>')|safe }}</p>
-
-      <div class=\"row g-3\">
-        <div class=\"col-md-6\">
-          <div class=\"small text-secondary\">Requester</div>
-          <div>{{ t['requester_name'] or '—' }} {% if t['requester_email'] %}• <a href=\"mailto:{{t['requester_email']}}\">{{ t['requester_email'] }}</a>{% endif %}</div>
-        </div>
-        <div class=\"col-md-3\">
-          <div class=\"small text-secondary\">Branch</div>
-          <div>{{ t['branch'] or '—' }}</div>
-        </div>
-        <div class=\"col-md-3\">
-          <div class=\"small text-secondary\">Category</div>
-          <div>{{ t['category'] or '—' }}</div>
-        </div>
-      </div>
-
-      <hr>
-      <h5 class=\"mb-3\">Comments</h5>
-      {% for c in comments %}
-        <div class=\"mb-3\">
-          <div class=\"small text-secondary\">{{ format_ts(c['created_at']) }} • {{ c['author'] or 'Anonymous' }}</div>
-          <div>{{ c['body']|replace('\\n','<br>')|safe }}</div>
-        </div>
-      {% else %}
-        <p class=\"text-secondary\">No comments yet.</p>
-      {% endfor %}
-
-      <form method=\"post\" action=\"{{ url_for('add_comment', ticket_id=t['id']) }}\" class=\"mt-3\">
-        <div class=\"row g-2\">
-          <div class=\"col-md-3\"><input class=\"form-control\" name=\"author\" placeholder=\"Your name\"></div>
-          <div class=\"col-md-9\"><textarea class=\"form-control\" name=\"body\" rows=\"3\" placeholder=\"Add a comment…\" required></textarea></div>
-        </div>
-        <div class=\"mt-2\"><button class=\"btn btn-primary\">Post Comment</button></div>
-      </form>
+{% block workspace_content %}
+{% set status = t['status'] or 'Open' %}
+{% set status_style = status_badges.get(status, status_badges['Open']) %}
+{% set priority_label = t['priority'] or 'Medium' %}
+{% set priority_style = priority_badges.get(priority_label, priority_badges['Medium']) %}
+<div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+  <div>
+    <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-ticket-detailed"></i> Ticket #{{ t['id'] }}</span>
+    <h2 class="fw-semibold mt-2 mb-2">{{ t['title'] }}</h2>
+    <div class="d-flex flex-wrap gap-2 text-secondary small">
+      <span><i class="bi bi-person-circle me-1"></i>{{ t['requester_name'] or 'Anonymous' }}</span>
+      {% if t['requester_email'] %}<span>• <i class="bi bi-envelope me-1"></i>{{ t['requester_email'] }}</span>{% endif %}
+      {% if t['branch'] %}<span>• <i class="bi bi-geo-alt me-1"></i>{{ t['branch'] }}</span>{% endif %}
+      <span>• Created {{ format_ts(t['created_at']) }}</span>
     </div>
   </div>
-  <div class=\"col-lg-4\">
-    <div class=\"card p-3\">
-      <h5 class=\"mb-3\">Ticket Controls</h5>
+  <div class="d-flex flex-wrap gap-2">
+    <span class="{{ status_style.cls }}"><i class="{{ status_style.icon }}"></i>{{ status }}</span>
+    <span class="{{ priority_style.cls }}"><i class="{{ priority_style.icon }}"></i>{{ priority_label }} Priority</span>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-xl-8">
+    <div class="surface-card p-4">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="fw-semibold mb-0">Issue details</h5>
+        <span class="badge-chip badge-closed"><i class="bi bi-tag"></i>{{ t['category'] or 'Uncategorized' }}</span>
+      </div>
+      <p class="mb-0" style="white-space: pre-line;">{{ t['description'] }}</p>
+      <div class="d-flex flex-wrap gap-3 text-secondary small mt-4">
+        <span><i class="bi bi-clock-history me-1"></i>Updated {{ format_ts(t['updated_at']) }}</span>
+        <span><i class="bi bi-calendar-check me-1"></i>Completed {{ format_ts(t['completed_at']) }}</span>
+        <span><i class="bi bi-person-bounding-box me-1"></i>Assigned to {{ t['assignee'] or 'Unassigned' }}</span>
+      </div>
+    </div>
+
+    <div class="surface-card p-4 mt-4">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="fw-semibold mb-0">Activity timeline</h5>
+        <span class="text-secondary small">Automatic history & comments</span>
+      </div>
+      <div class="timeline">
+        <div class="timeline-entry">
+          <div class="fw-semibold">Ticket created</div>
+          <div class="text-secondary small">{{ format_ts(t['created_at']) }} • {{ t['requester_name'] or 'Anonymous' }}</div>
+        </div>
+        {% for c in comments %}
+        <div class="timeline-entry">
+          <div class="fw-semibold d-flex align-items-center gap-2"><i class="bi bi-chat-dots text-success"></i>{{ c['author'] or 'Anonymous' }}</div>
+          <div class="text-secondary small">{{ format_ts(c['created_at']) }}</div>
+          <div class="mt-2" style="white-space: pre-line;">{{ c['body'] }}</div>
+        </div>
+        {% else %}
+        <div class="timeline-entry">
+          <div class="fw-semibold text-secondary">No comments yet</div>
+          <div class="text-secondary small">Collaborate with your team to resolve this request.</div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-4">
+        <form method="post" action="{{ url_for('add_comment', ticket_id=t['id']) }}" class="surface-card p-3 border-0">
+          <div class="row g-3 align-items-start">
+            <div class="col-md-3">
+              <label class="form-label text-uppercase small">Your name</label>
+              <input class="form-control" name="author" placeholder="Optional">
+            </div>
+            <div class="col-md-9">
+              <label class="form-label text-uppercase small">Comment</label>
+              <textarea class="form-control" name="body" rows="3" placeholder="Add an update for the team" required></textarea>
+            </div>
+          </div>
+          <div class="d-flex justify-content-end mt-3">
+            <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-chat-text"></i>Post update</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-xl-4">
+    <div class="surface-card p-4 mb-4">
+      <h5 class="fw-semibold mb-3">Requester info</h5>
+      <div class="d-flex flex-column gap-2 text-secondary small">
+        <div><i class="bi bi-person-fill me-2"></i>{{ t['requester_name'] or 'Not provided' }}</div>
+        <div><i class="bi bi-envelope me-2"></i>{{ t['requester_email'] or 'Not provided' }}</div>
+        <div><i class="bi bi-geo-alt me-2"></i>{{ t['branch'] or 'No branch set' }}</div>
+      </div>
+    </div>
+    <div class="surface-card p-4">
+      <h5 class="fw-semibold mb-3">Ticket controls</h5>
       {% if admin %}
-      <form method=\"post\" action=\"{{ url_for('update_status', ticket_id=t['id']) }}\" class=\"mb-3\">
-        <label class=\"form-label\">Status</label>
-        <div class=\"d-flex gap-2\">
-          <select name=\"status\" class=\"form-select\">
-            {% for s in statuses %}<option value=\"{{s}}\" {% if s==t['status'] %}selected{% endif %}>{{s}}</option>{% endfor %}
+      <form method="post" action="{{ url_for('update_status', ticket_id=t['id']) }}" class="mb-3">
+        <label class="form-label text-uppercase small">Status</label>
+        <div class="d-flex gap-2">
+          <select name="status" class="form-select">
+            {% for s in statuses %}<option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>{% endfor %}
           </select>
-          <button class=\"btn btn-primary\" type=\"submit\">Update</button>
+          <button class="btn btn-primary" type="submit"><i class="bi bi-arrow-repeat"></i></button>
         </div>
       </form>
-
-      <form method=\"post\" action=\"{{ url_for('update_assignee', ticket_id=t['id']) }}\">
-        <label class=\"form-label\">Assignee</label>
-        <div class=\"d-flex gap-2\">
-          <input class=\"form-control\" name=\"assignee\" value=\"{{ t['assignee'] or '' }}\" placeholder=\"e.g., Brad Wells\">
-          <button class=\"btn btn-outline-light\" type=\"submit\">Save</button>
+      <form method="post" action="{{ url_for('update_assignee', ticket_id=t['id']) }}">
+        <label class="form-label text-uppercase small">Assignee</label>
+        <div class="d-flex gap-2">
+          <input class="form-control" name="assignee" value="{{ t['assignee'] or '' }}" placeholder="e.g., Brad Wells">
+          <button class="btn btn-outline-dark" type="submit">Save</button>
         </div>
       </form>
       {% else %}
-      <p class=\"text-secondary\">Ticket updates can be made by the Seegars IT team.</p>
+      <p class="text-secondary small mb-0">Ticket updates are managed by the Seegars IT administrators. Reach out if you need to escalate an issue.</p>
       {% endif %}
     </div>
   </div>
@@ -565,32 +1058,53 @@ DETAIL_HTML = """
 {% endblock %}
 """
 
+
 HOME_HTML = """
 {% extends 'base.html' %}
-{% block content %}
-<div class="card p-5">
-  <h1 class="mb-2" style="font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;">Just Seegars IT!</h1>
-  <p class="lead text-secondary mb-4">
-    Technology support made simple for the Seegars Fence Company team.
-  </p>
-
-  <div class="mb-4">
-    <p class="mb-1">Need help with your computer, software, or network?</p>
-    <p class="mb-1">This site uses secure Microsoft 365 sign-in to make sure every request reaches the right people.</p>
-    <p class="mb-0">Click <strong>New Ticket</strong> below to sign in and tell us how we can help — we’ll handle the rest.</p>
+{% block home_content %}
+<div class="row g-4 align-items-center">
+  <div class="col-lg-7">
+    <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-stars"></i> Seegars IT</span>
+    <h1 class="display-4 fw-semibold mt-3 mb-3">Dedicated IT Support for the Seegars Fence Company Team</h1>
+    <p class="lead text-secondary mb-4">Log, track, and resolve technology issues with the same polish as enterprise ticketing suites — all tuned to Seegars Fence Company’s workflow.</p>
+    <ul class="list-unstyled d-flex flex-column gap-2 text-secondary">
+      <li><i class="bi bi-check-circle-fill text-success me-2"></i>Secure Microsoft 365 authentication keeps requests protected.</li>
+      <li><i class="bi bi-check-circle-fill text-success me-2"></i>Live dashboards give IT teams instant visibility into workload.</li>
+      <li><i class="bi bi-check-circle-fill text-success me-2"></i>Smart triage fields route the right work to the right experts.</li>
+    </ul>
+    <div class="d-flex flex-wrap gap-3 mt-4">
+      {% if session.get('user') %}
+        <a class="btn btn-primary btn-lg d-flex align-items-center gap-2" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-lg"></i>New Ticket</a>
+        <a class="btn btn-outline-dark d-flex align-items-center gap-2" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer2"></i>Open dashboard</a>
+      {% else %}
+        <a class="btn btn-primary btn-lg d-flex align-items-center gap-2" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right"></i>Sign in with Microsoft</a>
+        <a class="btn btn-outline-dark d-flex align-items-center gap-2" href="{{ url_for('tickets') }}"><i class="bi bi-eye"></i>Preview workspace</a>
+      {% endif %}
+    </div>
   </div>
-
-  <div class="d-flex gap-2">
-  {% if session.get('user') %}
-    <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">+ New Ticket</a>
-  {% else %}
-    <a class="btn btn-primary" href="{{ url_for('login') }}">Sign in with Microsoft</a>
-  {% endif %}
-</div>
-
+  <div class="col-lg-5">
+    <div class="surface-card p-4 p-lg-5 h-100">
+      <h5 class="fw-semibold mb-3">What’s new?</h5>
+      <div class="d-flex flex-column gap-3 text-secondary">
+        <div class="d-flex gap-3">
+          <div class="badge-chip badge-progress"><i class="bi bi-layout-sidebar"></i>Workspace shell</div>
+          <p class="mb-0">A persistent navigation experience inspired by premium ticketing tools.</p>
+        </div>
+        <div class="d-flex gap-3">
+          <div class="badge-chip badge-complete"><i class="bi bi-bar-chart"></i>Insight cards</div>
+          <p class="mb-0">Track totals, open work, and completions at a glance.</p>
+        </div>
+        <div class="d-flex gap-3">
+          <div class="badge-chip badge-waiting"><i class="bi bi-funnel"></i>Advanced filters</div>
+          <p class="mb-0">Plan saved views and automation rules tailored to each branch.</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 """
+
 
 # --------------------------------------------------------------------------------------
 # Routes
@@ -629,10 +1143,14 @@ def tickets():
                 DASHBOARD_HTML,
                 tickets=tickets,
                 statuses=STATUSES,
+                priorities=PRIORITIES,
                 admin=admin,
                 stats=stats,
                 category_stats=category_stats,
                 format_ts=format_timestamp,
+                branches=BRANCHES,
+                status_badges=STATUS_BADGES,
+                priority_badges=PRIORITY_BADGES,
             )
 
     sql += " ORDER BY datetime(created_at) DESC, id DESC"
@@ -659,10 +1177,14 @@ def tickets():
         DASHBOARD_HTML,
         tickets=tickets,
         statuses=STATUSES,
+        priorities=PRIORITIES,
         admin=admin,
         stats=stats,
         category_stats=category_stats,
         format_ts=format_timestamp,
+        branches=BRANCHES,
+        status_badges=STATUS_BADGES,
+        priority_badges=PRIORITY_BADGES,
     )
 
 
@@ -778,6 +1300,8 @@ def ticket_detail(ticket_id: int):
         statuses=STATUSES,
         admin=is_admin_user(),
         format_ts=format_timestamp,
+        status_badges=STATUS_BADGES,
+        priority_badges=PRIORITY_BADGES,
     )
 
 
