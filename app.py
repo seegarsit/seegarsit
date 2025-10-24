@@ -1065,7 +1065,7 @@ HOME_HTML = """
 <div class="row g-4 align-items-center">
   <div class="col-lg-7">
     <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-stars"></i> Seegars IT</span>
-    <h1 class="display-4 fw-semibold mt-3 mb-3">Dedicated Support for the Seegars Fence Company Team</h1>
+    <h1 class="display-4 fw-semibold mt-3 mb-3">Seegars IT Support Center</h1>
     <p class="lead text-secondary mb-4">Log, track, and resolve technology issues with the same polish as enterprise ticketing suites — all tuned to Seegars Fence Company’s workflow.</p>
     <ul class="list-unstyled d-flex flex-column gap-2 text-secondary">
       <li><i class="bi bi-check-circle-fill text-success me-2"></i>Secure Microsoft 365 authentication keeps requests protected.</li>
