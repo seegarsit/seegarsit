@@ -2,11 +2,23 @@
 from __future__ import annotations
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from functools import wraps
 
-from flask import Flask, g, redirect, render_template_string, request, url_for, flash, session
+from collections import Counter
+
+from flask import (
+    Flask,
+    abort,
+    flash,
+    g,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
 from jinja2 import DictLoader
 from msal import ConfidentialClientApplication
 import uuid
@@ -95,7 +107,8 @@ def init_db():
             assignee TEXT,
             status TEXT CHECK(status IN ('Open','In Progress','Waiting','Resolved','Closed')) DEFAULT 'Open',
             created_at TIMESTAMP NOT NULL,
-            updated_at TIMESTAMP NOT NULL
+            updated_at TIMESTAMP NOT NULL,
+            completed_at TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS comments (
@@ -114,6 +127,14 @@ def init_db():
         """
     )
     db.commit()
+
+    # Ensure legacy databases include the completed_at column
+    try:
+        db.execute("ALTER TABLE tickets ADD COLUMN completed_at TIMESTAMP")
+        db.commit()
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
 
 # --------------------------------------------------------------------------------------
 # Auth helpers
@@ -141,6 +162,7 @@ def login_required(view_func):
 # Constants / helpers
 # --------------------------------------------------------------------------------------
 STATUSES = ["Open", "In Progress", "Waiting", "Resolved", "Closed"]
+COMPLETED_STATUSES = {"Resolved", "Closed"}
 PRIORITIES = ["Low", "Medium", "High"]
 ASSIGNEE_DEFAULT = "Brad Wells"
 BRANCHES = [
@@ -159,8 +181,43 @@ CATEGORIES = [
     "Other",
 ]
 
+ADMIN_EMAILS = {"brad@seegarsfence.com"}
+
 def now_ts():
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).isoformat()
+
+
+def current_user_email() -> Optional[str]:
+    user = session.get("user") or {}
+    email = user.get("email")
+    if email:
+        return email.lower()
+    return None
+
+
+def is_admin_user() -> bool:
+    email = current_user_email()
+    return bool(email and email in ADMIN_EMAILS)
+
+
+def format_timestamp(value: Optional[str]) -> str:
+    if not value:
+        return "—"
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value)
+            # Normalize trailing Z to be ISO compliant
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%b %d, %Y %I:%M %p UTC")
+    except Exception:
+        return str(value)
 
 # --------------------------------------------------------------------------------------
 # Templates (kept inline for single-file simplicity)
@@ -263,75 +320,100 @@ BASE_HTML = """
 </html>
 """
 
-INDEX_HTML = """
+DASHBOARD_HTML = """
 {% extends 'base.html' %}
 {% block content %}
-<div class=\"card p-3 mb-4\">
-  <form class=\"row g-2\" method=\"get\">
-    <div class=\"col-md-3\">
-      <input name=\"q\" value=\"{{ request.args.get('q','') }}\" class=\"form-control\" placeholder=\"Search title/description/assignee…\">
+<div class=\"row g-3 mb-4\">
+  <div class=\"col-md-4 col-lg-3\">
+    <div class=\"card p-3 h-100\">
+      <div class=\"text-uppercase small text-secondary mb-1\">Total Tickets{% if admin %} (All Users){% endif %}</div>
+      <div class=\"display-6 fw-bold\">{{ stats.total }}</div>
     </div>
-    <div class=\"col-md-2\">
-      <select name=\"status\" class=\"form-select\">
-        <option value=\"\">All Statuses</option>
-        {% for s in statuses %}
-        <option value=\"{{s}}\" {% if request.args.get('status')==s %}selected{% endif %}>{{s}}</option>
+  </div>
+  <div class=\"col-md-4 col-lg-3\">
+    <div class=\"card p-3 h-100\">
+      <div class=\"text-uppercase small text-secondary mb-1\">Open Tickets</div>
+      <div class=\"display-6 fw-bold text-warning\">{{ stats.open }}</div>
+    </div>
+  </div>
+  <div class=\"col-md-4 col-lg-3\">
+    <div class=\"card p-3 h-100\">
+      <div class=\"text-uppercase small text-secondary mb-1\">Completed Tickets</div>
+      <div class=\"display-6 fw-bold text-success\">{{ stats.completed }}</div>
+    </div>
+  </div>
+  <div class=\"col-lg-3\">
+    <div class=\"card p-3 h-100\">
+      <div class=\"text-uppercase small text-secondary mb-2\">Tickets by Category</div>
+      <div class=\"d-flex flex-column gap-2\">
+        {% for item in category_stats %}
+        <div class=\"d-flex justify-content-between\">
+          <span class=\"fw-semibold\">{{ item.category }}</span>
+          <span class=\"text-secondary\">{{ item.count }}</span>
+        </div>
+        {% else %}
+        <div class=\"text-secondary\">No tickets yet.</div>
         {% endfor %}
-      </select>
+      </div>
     </div>
-    <div class=\"col-md-2\">
-      <select name=\"priority\" class=\"form-select\">
-        <option value=\"\">All Priorities</option>
-        {% for p in priorities %}
-        <option value=\"{{p}}\" {% if request.args.get('priority')==p %}selected{% endif %}>{{p}}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class=\"col-md-2\">
-      <input name=\"branch\" value=\"{{ request.args.get('branch','') }}\" class=\"form-control\" placeholder=\"Branch\">
-    </div>
-    <div class=\"col-md-2\">
-      <select name=\"sort\" class=\"form-select\">
-        <option value=\"new\">Newest</option>
-        <option value=\"old\" {% if request.args.get('sort')=='old' %}selected{% endif %}>Oldest</option>
-        <option value=\"priority\" {% if request.args.get('sort')=='priority' %}selected{% endif %}>Priority</option>
-        <option value=\"status\" {% if request.args.get('sort')=='status' %}selected{% endif %}>Status</option>
-      </select>
-    </div>
-    <div class=\"col-md-1 d-grid\">
-      <button class=\"btn btn-primary\" type=\"submit\">Filter</button>
-    </div>
-  </form>
+  </div>
 </div>
 
 <div class=\"card p-0\">
   <div class=\"table-responsive\">
-  <table class=\"table align-middle mb-0\">
-    <thead>
-      <tr>
-        <th>ID</th><th>Title</th><th>Branch</th><th>Priority</th><th>Status</th><th>Assignee</th><th>Updated</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for t in tickets %}
-      <tr>
-        <td><a href=\"{{ url_for('ticket_detail', ticket_id=t['id']) }}\">#{{ t['id'] }}</a></td>
-        <td><a href=\"{{ url_for('ticket_detail', ticket_id=t['id']) }}\">{{ t['title'] }}</a></td>
-        <td>{{ t['branch'] or '—' }}</td>
-        <td>
-          <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
-        </td>
-        <td>
-          <span class=\"badge text-bg-{% if t['status'] in ['Open','In Progress'] %}primary{% elif t['status']=='Waiting' %}warning{% elif t['status']=='Resolved' %}success{% else %}secondary{% endif %}\">{{ t['status'] }}</span>
-        </td>
-        <td>{{ t['assignee'] or '—' }}</td>
-        <td>{{ t['updated_at'] }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan=\"7\" class=\"text-center py-4\">No tickets found.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <table class=\"table align-middle mb-0\">
+      <thead>
+        <tr>
+          <th>Date Submitted</th>
+          {% if admin %}<th>Branch</th>{% endif %}
+          <th>Title</th>
+          <th>Priority</th>
+          <th>Category</th>
+          <th>Status</th>
+          <th>Date Completed</th>
+          {% if admin %}<th class=\"text-end\">Manage</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tickets %}
+        <tr>
+          <td>{{ format_ts(t['created_at']) }}</td>
+          {% if admin %}
+          <td>{{ t['branch'] or '—' }}</td>
+          {% endif %}
+          <td>
+            <div class=\"fw-semibold\">{{ t['title'] }}</div>
+            <div class=\"small text-secondary\">#{{ t['id'] }}{% if admin and t['requester_name'] %} • {{ t['requester_name'] }}{% endif %}</div>
+          </td>
+          <td>
+            <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
+          </td>
+          <td>{{ t['category'] or '—' }}</td>
+          <td>
+            <span class=\"badge text-bg-{% if t['status'] in ['Open','In Progress'] %}primary{% elif t['status']=='Waiting' %}warning{% elif t['status']=='Resolved' %}success{% else %}secondary{% endif %}\">{{ t['status'] }}</span>
+          </td>
+          <td>{{ format_ts(t['completed_at']) }}</td>
+          {% if admin %}
+          <td class=\"text-end\">
+            <form class=\"d-flex gap-2 justify-content-end flex-wrap\" method=\"post\" action=\"{{ url_for('update_status', ticket_id=t['id']) }}\">
+              <select name=\"status\" class=\"form-select form-select-sm\" style=\"min-width:140px\">
+                {% for s in statuses %}
+                <option value=\"{{ s }}\" {% if s == t['status'] %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+              <button class=\"btn btn-sm btn-primary\" type=\"submit\">Update</button>
+              <a class=\"btn btn-sm btn-outline-light\" href=\"{{ url_for('ticket_detail', ticket_id=t['id']) }}\">Details</a>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan=\"{% if admin %}8{% else %}7{% endif %}\" class=\"text-center py-4\">No tickets yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}
@@ -412,7 +494,10 @@ DETAIL_HTML = """
         <h3 class=\"mb-1\">#{{ t['id'] }} – {{ t['title'] }}</h3>
         <span class=\"badge text-bg-{% if t['priority']=='High' %}danger{% elif t['priority']=='Medium' %}warning{% else %}secondary{% endif %}\">{{ t['priority'] }}</span>
       </div>
-      <p class=\"text-secondary\">Created {{ t['created_at'] }} • Updated {{ t['updated_at'] }}</p>
+      <p class=\"text-secondary\">
+        Created {{ format_ts(t['created_at']) }} • Updated {{ format_ts(t['updated_at']) }}
+        {% if t['completed_at'] %}• Completed {{ format_ts(t['completed_at']) }}{% endif %}
+      </p>
       <p class=\"mb-3\">{{ t['description']|replace('\\n','<br>')|safe }}</p>
 
       <div class=\"row g-3\">
@@ -434,7 +519,7 @@ DETAIL_HTML = """
       <h5 class=\"mb-3\">Comments</h5>
       {% for c in comments %}
         <div class=\"mb-3\">
-          <div class=\"small text-secondary\">{{ c['created_at'] }} • {{ c['author'] or 'Anonymous' }}</div>
+          <div class=\"small text-secondary\">{{ format_ts(c['created_at']) }} • {{ c['author'] or 'Anonymous' }}</div>
           <div>{{ c['body']|replace('\\n','<br>')|safe }}</div>
         </div>
       {% else %}
@@ -453,6 +538,7 @@ DETAIL_HTML = """
   <div class=\"col-lg-4\">
     <div class=\"card p-3\">
       <h5 class=\"mb-3\">Ticket Controls</h5>
+      {% if admin %}
       <form method=\"post\" action=\"{{ url_for('update_status', ticket_id=t['id']) }}\" class=\"mb-3\">
         <label class=\"form-label\">Status</label>
         <div class=\"d-flex gap-2\">
@@ -470,6 +556,9 @@ DETAIL_HTML = """
           <button class=\"btn btn-outline-light\" type=\"submit\">Save</button>
         </div>
       </form>
+      {% else %}
+      <p class=\"text-secondary\">Ticket updates can be made by the Seegars IT team.</p>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -517,45 +606,64 @@ def tickets():
     with app.app_context():
         init_db()
     db = get_db()
-    q = request.args.get("q", "").strip()
-    status = request.args.get("status", "").strip()
-    priority = request.args.get("priority", "").strip()
-    branch = request.args.get("branch", "").strip()
-    sort = request.args.get("sort", "new")
+    admin = is_admin_user()
 
     sql = (
-        "SELECT id, title, description, requester_name, requester_email, "
-        "branch, priority, category, assignee, status, "
-        "CAST(created_at AS TEXT) AS created_at, "
-        "CAST(updated_at AS TEXT) AS updated_at "
-        "FROM tickets WHERE 1=1"
+        "SELECT id, title, requester_name, requester_email, branch, priority, category, "
+        "assignee, status, CAST(created_at AS TEXT) AS created_at, "
+        "CAST(updated_at AS TEXT) AS updated_at, CAST(completed_at AS TEXT) AS completed_at "
+        "FROM tickets"
     )
 
-    params: list = []
-    if q:
-        sql += " AND (title LIKE ? OR description LIKE ? OR assignee LIKE ?)"
-        like = f"%{q}%"
-        params += [like, like, like]
-    if status:
-        sql += " AND status = ?"
-        params.append(status)
-    if priority:
-        sql += " AND priority = ?"
-        params.append(priority)
-    if branch:
-        sql += " AND branch LIKE ?"
-        params.append(f"%{branch}%")
+    params: list[str] = []
+    if not admin:
+        email = current_user_email()
+        if email:
+            sql += " WHERE LOWER(requester_email) = ?"
+            params.append(email)
+        else:
+            tickets = []
+            stats = {"total": 0, "open": 0, "completed": 0}
+            category_stats: list[dict[str, str | int]] = []
+            return render_template_string(
+                DASHBOARD_HTML,
+                tickets=tickets,
+                statuses=STATUSES,
+                admin=admin,
+                stats=stats,
+                category_stats=category_stats,
+                format_ts=format_timestamp,
+            )
 
-    order = {
-        "new": "updated_at DESC",
-        "old": "updated_at ASC",
-        "priority": "CASE priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, updated_at DESC",
-        "status": "status ASC, updated_at DESC",
-    }.get(sort, "updated_at DESC")
-    sql += f" ORDER BY {order}"
+    sql += " ORDER BY datetime(created_at) DESC, id DESC"
+    rows = db.execute(sql, params).fetchall()
+    tickets = [dict(row) for row in rows]
 
-    tickets = db.execute(sql, params).fetchall()
-    return render_template_string(INDEX_HTML, tickets=tickets, statuses=STATUSES, priorities=PRIORITIES)
+    total = len(tickets)
+    completed = sum(1 for row in tickets if row.get("status") in COMPLETED_STATUSES)
+    open_count = total - completed
+
+    category_counter: Counter[str] = Counter()
+    for row in tickets:
+        category = (row.get("category") or "Uncategorized").strip() or "Uncategorized"
+        category_counter[category] += 1
+
+    category_stats = [
+        {"category": name, "count": count}
+        for name, count in category_counter.most_common()
+    ]
+
+    stats = {"total": total, "open": open_count, "completed": completed}
+
+    return render_template_string(
+        DASHBOARD_HTML,
+        tickets=tickets,
+        statuses=STATUSES,
+        admin=admin,
+        stats=stats,
+        category_stats=category_stats,
+        format_ts=format_timestamp,
+    )
 
 
 @app.route("/new", methods=["GET", "POST"])
@@ -570,12 +678,15 @@ def new_ticket():
             flash("Title and Description are required.")
             return redirect(url_for("new_ticket"))
 
-        ts = datetime.now(datetime.UTC).isoformat()
+        ts = now_ts()
         db = get_db()
         cur = db.execute(
             """
-            INSERT INTO tickets (title, description, requester_name, requester_email, branch, priority, category, assignee, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?)
+            INSERT INTO tickets (
+                title, description, requester_name, requester_email, branch, priority,
+                category, assignee, status, created_at, updated_at, completed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, NULL)
             """,
             (
                 data["title"],
@@ -595,13 +706,14 @@ def new_ticket():
 
                 # --- Email notifications (uses session['access_token']) ---
         subject_admin = f"A new ticket has been submitted by {data['requester_name'] or 'Unknown User'}"
+        description_html = data["description"].replace("\n", "<br>")
         body_admin = f"""
         <p><strong>A new ticket has been submitted to Seegars IT.</strong></p>
         <p><strong>Submitted by:</strong> {data['requester_name']} &lt;{data['requester_email']}&gt;</p>
         <p><strong>Priority:</strong> {data['priority']}<br>
         <strong>Branch:</strong> {data['branch']}<br>
         <strong>Category:</strong> {data['category']}</p>
-        <p><strong>Issue Description:</strong><br>{data['description'].replace('\n','<br>')}</p>
+        <p><strong>Issue Description:</strong><br>{description_html}</p>
         """
         send_email("brad@seegarsfence.com", subject_admin, body_admin)
 
@@ -615,6 +727,7 @@ def new_ticket():
             Priority: {data['priority']}<br>
             Branch: {data['branch']}<br>
             Category: {data['category']}</p>
+            <p><strong>Issue Description:</strong><br>{description_html}</p>
             <p><em>We appreciate your patience — our goal is to keep your tech running smoothly!</em></p>
             """
             send_email(data["requester_email"], subject_user, body_user)
@@ -637,15 +750,35 @@ def ticket_detail(ticket_id: int):
     with app.app_context():
         init_db()
     db = get_db()
-    t = db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    t = db.execute(
+        """
+        SELECT id, title, description, requester_name, requester_email, branch, priority,
+               category, assignee, status,
+               CAST(created_at AS TEXT) AS created_at,
+               CAST(updated_at AS TEXT) AS updated_at,
+               CAST(completed_at AS TEXT) AS completed_at
+        FROM tickets WHERE id = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
     if not t:
         flash("Ticket not found.")
         return redirect(url_for("tickets"))
     comments = db.execute(
-        "SELECT * FROM comments WHERE ticket_id = ? ORDER BY created_at ASC",
-        (ticket_id,)
+        """
+        SELECT id, ticket_id, author, body, CAST(created_at AS TEXT) AS created_at
+        FROM comments WHERE ticket_id = ? ORDER BY datetime(created_at) ASC
+        """,
+        (ticket_id,),
     ).fetchall()
-    return render_template_string(DETAIL_HTML, t=t, comments=comments, statuses=STATUSES)
+    return render_template_string(
+        DETAIL_HTML,
+        t=dict(t),
+        comments=[dict(c) for c in comments],
+        statuses=STATUSES,
+        admin=is_admin_user(),
+        format_ts=format_timestamp,
+    )
 
 
 @app.route("/ticket/<int:ticket_id>/comment", methods=["POST"])
@@ -672,15 +805,19 @@ def add_comment(ticket_id: int):
 @app.route("/ticket/<int:ticket_id>/status", methods=["POST"])
 @login_required
 def update_status(ticket_id: int):
+    if not is_admin_user():
+        abort(403)
     with app.app_context():
         init_db()
     status = (request.form.get("status") or "Open").strip()
     if status not in STATUSES:
         status = "Open"
     db = get_db()
+    ts = now_ts()
+    completed_at = ts if status in COMPLETED_STATUSES else None
     db.execute(
-        "UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?",
-        (status, now_ts(), ticket_id),
+        "UPDATE tickets SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
+        (status, ts, completed_at, ticket_id),
     )
     db.commit()
     flash("Status updated.")
@@ -690,6 +827,8 @@ def update_status(ticket_id: int):
 @app.route("/ticket/<int:ticket_id>/assignee", methods=["POST"])
 @login_required
 def update_assignee(ticket_id: int):
+    if not is_admin_user():
+        abort(403)
     with app.app_context():
         init_db()
     assignee = (request.form.get("assignee") or "").strip()
@@ -769,7 +908,7 @@ def logout():
 app.jinja_loader = DictLoader({
     "base.html": BASE_HTML,
     "home.html": HOME_HTML,   # ← add this line
-    "index.html": INDEX_HTML,
+    "dashboard.html": DASHBOARD_HTML,
     "new.html": NEW_HTML,
     "detail.html": DETAIL_HTML,
 })
