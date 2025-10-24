@@ -334,6 +334,7 @@ INDEX_HTML = """
   </table>
   </div>
 </div>
+<footer class=\"mt-4 text-center text-muted\">Seegars IT — Deployed via Codex</footer>
 {% endblock %}
 """
 
