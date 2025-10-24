@@ -1,5 +1,6 @@
 # test change from Codex
 from __future__ import annotations
+import io
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from flask import (
     redirect,
     render_template_string,
     request,
+    send_file,
     session,
     url_for,
 )
@@ -23,6 +25,7 @@ from jinja2 import DictLoader
 from msal import ConfidentialClientApplication
 import uuid
 import requests
+from werkzeug.utils import secure_filename
 
 def send_email(to_addrs, subject, html_body):
     """Send an email via Microsoft Graph using the current user's access token."""
@@ -63,6 +66,7 @@ def send_email(to_addrs, subject, html_body):
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "dev-secret")
 DB_PATH = os.environ.get("TICKETS_DB", "app.db")
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB overall request cap
 
 # Microsoft Entra (Azure AD / M365) app details come from environment variables on Render
 CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
@@ -120,10 +124,21 @@ def init_db():
             FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            content_type TEXT,
+            data BLOB NOT NULL,
+            uploaded_at TIMESTAMP NOT NULL,
+            FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
         CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
         CREATE INDEX IF NOT EXISTS idx_tickets_branch ON tickets(branch);
         CREATE INDEX IF NOT EXISTS idx_comments_ticket ON comments(ticket_id);
+        CREATE INDEX IF NOT EXISTS idx_attachments_ticket ON attachments(ticket_id);
         """
     )
     db.commit()
@@ -165,6 +180,7 @@ STATUSES = ["Open", "In Progress", "Waiting", "Resolved", "Closed"]
 COMPLETED_STATUSES = {"Resolved", "Closed"}
 PRIORITIES = ["Low", "Medium", "High"]
 ASSIGNEE_DEFAULT = "Brad Wells"
+MAX_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024  # 10 MB per ticket submission
 STATUS_BADGES = {
     "Open": {"cls": "badge-chip badge-open", "icon": "bi bi-lightning-charge"},
     "In Progress": {"cls": "badge-chip badge-progress", "icon": "bi bi-arrow-repeat"},
@@ -197,6 +213,21 @@ ADMIN_EMAILS = {"brad@seegarsfence.com"}
 
 def now_ts():
     return datetime.now(timezone.utc).isoformat()
+
+
+def format_file_size(num_bytes: int) -> str:
+    """Convert a byte count to a human-friendly label."""
+    if num_bytes <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB"]
+    value = float(num_bytes)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
 
 
 def current_user_email() -> Optional[str]:
@@ -867,7 +898,7 @@ NEW_HTML = """
     <span class="filter-pill"><i class="bi bi-3-circle"></i>Review & submit</span>
   </div>
 
-  <form method="post" class="d-flex flex-column gap-4">
+  <form method="post" enctype="multipart/form-data" class="d-flex flex-column gap-4">
     <div class="row g-4">
       <div class="col-lg-8">
         <div class="d-flex flex-column gap-3">
@@ -920,9 +951,17 @@ NEW_HTML = """
               {% endfor %}
             </select>
           </div>
-          <div class="small text-secondary d-flex gap-2">
-            <i class="bi bi-paperclip"></i>
-            <span>Attachments and screenshots can be emailed to <strong>helpdesk@seegarsfence.com</strong>.</span>
+          <div class="mb-3">
+            <label class="form-label text-uppercase small">Attachments</label>
+            <input type="file" id="attachments" name="attachments" class="form-control" multiple hidden>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <label for="attachments" class="btn btn-outline-dark btn-sm d-flex align-items-center gap-2 mb-0">
+                <i class="bi bi-paperclip"></i>
+                Add attachments
+              </label>
+              <span class="text-secondary small">Total size up to {{ attachment_limit }}.</span>
+            </div>
+            <ul class="list-unstyled small text-secondary mt-2 mb-0" id="attachment-list"></ul>
           </div>
         </div>
       </div>
@@ -932,6 +971,28 @@ NEW_HTML = """
       <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-send"></i>Submit ticket</button>
     </div>
   </form>
+  <script>
+    const attachmentInput = document.getElementById('attachments');
+    const attachmentList = document.getElementById('attachment-list');
+    if (attachmentInput && attachmentList) {
+      attachmentInput.addEventListener('change', () => {
+        attachmentList.innerHTML = '';
+        if (!attachmentInput.files || attachmentInput.files.length === 0) {
+          return;
+        }
+        Array.from(attachmentInput.files).forEach((file) => {
+          const item = document.createElement('li');
+          item.className = 'd-flex align-items-center gap-2';
+          const icon = document.createElement('i');
+          icon.className = 'bi bi-file-earmark';
+          const text = document.createElement('span');
+          text.textContent = file.name;
+          item.append(icon, text);
+          attachmentList.appendChild(item);
+        });
+      });
+    }
+  </script>
 </div>
 {% endblock %}
 """
@@ -1029,6 +1090,24 @@ DETAIL_HTML = """
         <div><i class="bi bi-envelope me-2"></i>{{ t['requester_email'] or 'Not provided' }}</div>
         <div><i class="bi bi-geo-alt me-2"></i>{{ t['branch'] or 'No branch set' }}</div>
       </div>
+    </div>
+    <div class="surface-card p-4 mb-4">
+      <h5 class="fw-semibold mb-3">Attachments</h5>
+      {% if attachments %}
+      <ul class="list-unstyled d-flex flex-column gap-2 mb-0">
+        {% for file in attachments %}
+        <li class="d-flex justify-content-between align-items-center gap-3">
+          <a class="d-flex align-items-center gap-2" href="{{ url_for('download_attachment', ticket_id=t['id'], attachment_id=file['id']) }}">
+            <i class="bi bi-paperclip"></i>
+            <span>{{ file['filename'] }}</span>
+          </a>
+          <span class="text-secondary small">{{ file['size_label'] }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-secondary small mb-0">No attachments uploaded for this ticket.</p>
+      {% endif %}
     </div>
     <div class="surface-card p-4">
       <h5 class="fw-semibold mb-3">Ticket controls</h5>
@@ -1191,6 +1270,7 @@ def tickets():
 @app.route("/new", methods=["GET", "POST"])
 @login_required
 def new_ticket():
+    init_db()
     if request.method == "POST":
         data = {k: (request.form.get(k) or "").strip() for k in [
             "title", "description", "requester_name", "requester_email", "branch", "priority", "category"
@@ -1199,6 +1279,30 @@ def new_ticket():
         if not data["title"] or not data["description"]:
             flash("Title and Description are required.")
             return redirect(url_for("new_ticket"))
+
+        attachments_to_save: list[dict[str, object]] = []
+        total_size = 0
+        for upload in request.files.getlist("attachments"):
+            if not upload or not upload.filename:
+                continue
+            file_data = upload.read()
+            if not file_data:
+                continue
+            total_size += len(file_data)
+            if total_size > MAX_ATTACHMENT_TOTAL_BYTES:
+                flash(
+                    "Attachments exceed the total upload limit of "
+                    f"{format_file_size(MAX_ATTACHMENT_TOTAL_BYTES)}."
+                )
+                return redirect(url_for("new_ticket"))
+            filename = secure_filename(upload.filename) or f"attachment-{len(attachments_to_save) + 1}"
+            attachments_to_save.append(
+                {
+                    "filename": filename,
+                    "content_type": upload.mimetype,
+                    "data": file_data,
+                }
+            )
 
         ts = now_ts()
         db = get_db()
@@ -1224,6 +1328,22 @@ def new_ticket():
             )
         )
         ticket_id = cur.lastrowid
+        if attachments_to_save:
+            uploaded_ts = now_ts()
+            for item in attachments_to_save:
+                db.execute(
+                    """
+                    INSERT INTO attachments (ticket_id, filename, content_type, data, uploaded_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ticket_id,
+                        item["filename"],
+                        item["content_type"],
+                        item["data"],
+                        uploaded_ts,
+                    ),
+                )
         db.commit()
 
                 # --- Email notifications (uses session['access_token']) ---
@@ -1262,7 +1382,8 @@ def new_ticket():
         NEW_HTML,
         priorities=PRIORITIES,
         branches=BRANCHES,
-        categories=CATEGORIES
+        categories=CATEGORIES,
+        attachment_limit=format_file_size(MAX_ATTACHMENT_TOTAL_BYTES),
     )
 
 
@@ -1293,15 +1414,60 @@ def ticket_detail(ticket_id: int):
         """,
         (ticket_id,),
     ).fetchall()
+    attachments_rows = db.execute(
+        """
+        SELECT id, filename, content_type, LENGTH(data) AS size, CAST(uploaded_at AS TEXT) AS uploaded_at
+        FROM attachments
+        WHERE ticket_id = ?
+        ORDER BY datetime(uploaded_at) ASC, id ASC
+        """,
+        (ticket_id,),
+    ).fetchall()
+    attachments = [
+        {
+            "id": row["id"],
+            "filename": row["filename"],
+            "content_type": row["content_type"],
+            "size": row["size"] or 0,
+            "size_label": format_file_size(int(row["size"] or 0)),
+            "uploaded_at": row["uploaded_at"],
+        }
+        for row in attachments_rows
+    ]
     return render_template_string(
         DETAIL_HTML,
         t=dict(t),
         comments=[dict(c) for c in comments],
+        attachments=attachments,
         statuses=STATUSES,
         admin=is_admin_user(),
         format_ts=format_timestamp,
         status_badges=STATUS_BADGES,
         priority_badges=PRIORITY_BADGES,
+    )
+
+
+@app.route("/ticket/<int:ticket_id>/attachment/<int:attachment_id>")
+@login_required
+def download_attachment(ticket_id: int, attachment_id: int):
+    with app.app_context():
+        init_db()
+    db = get_db()
+    attachment = db.execute(
+        """
+        SELECT filename, content_type, data
+        FROM attachments
+        WHERE id = ? AND ticket_id = ?
+        """,
+        (attachment_id, ticket_id),
+    ).fetchone()
+    if not attachment:
+        abort(404)
+    return send_file(
+        io.BytesIO(attachment["data"]),
+        download_name=attachment["filename"],
+        mimetype=attachment["content_type"] or "application/octet-stream",
+        as_attachment=True,
     )
 
 
