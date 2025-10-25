@@ -1,6 +1,8 @@
 # test change from Codex
 from __future__ import annotations
 import io
+import json
+import math
 import os
 import sqlite3
 import time
@@ -9,6 +11,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
+from textwrap import shorten
 
 from collections import Counter
 
@@ -17,6 +20,7 @@ from flask import (
     abort,
     flash,
     g,
+    jsonify,
     redirect,
     render_template_string,
     request,
@@ -120,6 +124,130 @@ def send_email(to_addrs, subject, html_body):
     app.logger.warning("Failed to send email to %s", ", ".join(to_addrs))
     return False
 
+
+class OpenAIServiceError(RuntimeError):
+    """Raised when an OpenAI API request cannot be fulfilled."""
+
+
+def _openai_headers() -> dict[str, str]:
+    if not OPENAI_API_KEY:
+        raise OpenAIServiceError("OPENAI_API_KEY is not configured.")
+    return {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _openai_post(path: str, payload: dict, timeout: int = 30) -> dict:
+    base = OPENAI_BASE_URL.rstrip("/")
+    url = f"{base}/{path.lstrip('/')}"
+    try:
+        response = requests.post(url, headers=_openai_headers(), json=payload, timeout=timeout)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise OpenAIServiceError(f"OpenAI request failed: {exc}") from exc
+    try:
+        data = response.json()
+    except ValueError as exc:  # JSONDecodeError inherits from ValueError
+        raise OpenAIServiceError("OpenAI response was not valid JSON.") from exc
+    return data
+
+
+def embed_text(text: str) -> list[float]:
+    if not text.strip():
+        raise OpenAIServiceError("Cannot embed empty text.")
+    data = _openai_post(
+        "embeddings",
+        {
+            "model": OPENAI_EMBED_MODEL,
+            "input": text,
+        },
+    )
+    try:
+        embedding = data["data"][0]["embedding"]
+    except (KeyError, IndexError) as exc:
+        raise OpenAIServiceError("Embedding missing from OpenAI response.") from exc
+    if not isinstance(embedding, list):
+        raise OpenAIServiceError("Embedding payload was not a list.")
+    try:
+        return [float(val) for val in embedding]
+    except (TypeError, ValueError) as exc:
+        raise OpenAIServiceError("Embedding values were not numeric.") from exc
+
+
+def generate_answer(question: str, context: str) -> str:
+    prompt = (
+        "You are the Seegars IT support assistant. Answer employee questions using only the "
+        "information provided in the knowledge base context. If the context does not contain "
+        "the answer, tell the employee that no documented solution exists and they should create a support ticket."
+    )
+    payload = {
+        "model": OPENAI_CHAT_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {
+                "role": "user",
+                "content": (
+                    "Knowledge Base Context:\n" f"{context}\n\n"
+                    f"Employee Question: {question.strip()}"
+                ),
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 500,
+    }
+    data = _openai_post("chat/completions", payload, timeout=45)
+    try:
+        answer = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as exc:
+        raise OpenAIServiceError("Answer missing from OpenAI response.") from exc
+    return (answer or "").strip()
+
+
+def _load_embedding(raw: str | None) -> list[float] | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    vector: list[float] = []
+    try:
+        for value in data:
+            vector.append(float(value))
+    except (TypeError, ValueError):
+        return None
+    return vector
+
+
+def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
+    if not vector_a or not vector_b or len(vector_a) != len(vector_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vector_a, vector_b))
+    norm_a = math.sqrt(sum(a * a for a in vector_a))
+    norm_b = math.sqrt(sum(b * b for b in vector_b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _truncate_body(text: str, limit: int | None = None) -> str:
+    if limit is None:
+        limit = KB_CONTEXT_BODY_LIMIT
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    return shorten(cleaned, width=limit, placeholder="…")
+
+
+def _kb_unavailable_message() -> str:
+    return (
+        "I couldn't find a documented solution in the knowledge base. Please create a support "
+        "ticket so Seegars IT can help you directly."
+    )
+
 # --------------------------------------------------------------------------------------
 # Flask app config
 # --------------------------------------------------------------------------------------
@@ -192,6 +320,18 @@ CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")  # e.g., https://seegarsit.onrender.com/auth/callback
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}" if TENANT_ID else None
 SCOPE = ["User.Read", "Mail.Send"]
+
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_KB_MODEL", "gpt-5.1-mini")
+OPENAI_EMBED_MODEL = os.getenv("OPENAI_KB_EMBED_MODEL", "text-embedding-3-small")
+try:
+    KB_RELEVANCE_THRESHOLD = float(os.getenv("KB_RELEVANCE_THRESHOLD", "0.65"))
+except ValueError:
+    KB_RELEVANCE_THRESHOLD = 0.65
+KB_MAX_CONTEXT_ARTICLES = 5
+KB_CONTEXT_BODY_LIMIT = 700
 
 
 # --------------------------------------------------------------------------------------
@@ -994,7 +1134,7 @@ BASE_HTML = """
         <div class="nav-section-title">Workspace</div>
         <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
         <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
-        <a class="nav-pill disabled" href="#" onclick="return false;"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
+        <a class="nav-pill {% if request.endpoint in ('kb', 'kb_article') %}active{% endif %}" href="{{ url_for('kb') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
       </div>
       <div>
         <div class="nav-section-title">Shortcuts</div>
@@ -1893,6 +2033,197 @@ HOME_HTML = """
 """
 
 
+KB_HTML = """
+{% extends 'base.html' %}
+{% block workspace_content %}
+<section class="d-flex flex-column gap-4">
+  <div class="surface-card p-4 p-md-5">
+    <div class="d-flex flex-column flex-md-row gap-3 justify-content-between align-items-md-center">
+      <div>
+        <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-life-preserver"></i> Knowledge Base</span>
+        <h1 class="fw-semibold display-6 mt-3 mb-2">Instant Answers</h1>
+        <p class="text-secondary mb-0">Search proven resolutions from closed tickets before opening something new.</p>
+      </div>
+      <a class="btn btn-outline-dark" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i> Submit Ticket</a>
+    </div>
+    <form id="kb-search-form" class="mt-4" autocomplete="off">
+      <div class="input-group input-group-lg">
+        <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+        <input class="form-control border-start-0" id="kb-query" name="query" placeholder="Ask a question…" aria-label="Ask a question…">
+        <button class="btn btn-primary" type="submit"><i class="bi bi-stars me-1"></i>Ask</button>
+      </div>
+    </form>
+    <p class="text-secondary small mt-2 mb-0">Try phrases like "update Sage password" or "printer offline".</p>
+  </div>
+
+  <div id="kb-answer-card" class="surface-card p-4 p-md-5 d-none">
+    <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+      <h2 class="h5 fw-semibold mb-0">AI Answer</h2>
+      <span class="badge bg-light text-dark border">Preview</span>
+    </div>
+    <div id="kb-answer-text" class="text-secondary"></div>
+    <div id="kb-answer-sources" class="small text-muted mt-3"></div>
+    <div id="kb-answer-cta" class="alert alert-warning mt-4 d-none" role="alert">
+      Still need help? <a class="alert-link" href="{{ url_for('new_ticket') }}">Create a support ticket</a> so the team can jump in.
+    </div>
+  </div>
+
+  <div class="surface-card p-4 p-md-5">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+      <h2 class="h5 fw-semibold mb-0">Latest Knowledge Articles</h2>
+      <span class="text-secondary small">Mark helpful solutions so they rise to the top.</span>
+    </div>
+    <div class="d-flex flex-column gap-3">
+      {% if articles %}
+        {% for article in articles %}
+        <article class="border rounded-4 p-3 p-md-4">
+          <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+            <div>
+              <a class="h5 d-block mb-2" href="{{ url_for('kb_article', article_id=article.id) }}">{{ article.title }}</a>
+              <p class="text-secondary mb-2">{{ article.summary }}</p>
+              {% if article.tags %}
+              <div class="d-flex flex-wrap gap-2">
+                {% for tag in article.tags.split(',') if tag.strip() %}
+                <span class="badge bg-light text-dark border">{{ tag.strip() }}</span>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </div>
+            <div class="text-secondary small text-md-end">
+              <div><i class="bi bi-hand-thumbs-up"></i> {{ article.helpful_up or 0 }} helpful</div>
+              <div><i class="bi bi-hand-thumbs-down"></i> {{ article.helpful_down or 0 }} not helpful</div>
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      {% else %}
+      <div class="alert alert-info mb-0" role="alert">
+        No knowledge base content yet. Close a few tickets with solid write-ups to seed the library.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<script>
+(function() {
+  const form = document.getElementById('kb-search-form');
+  const input = document.getElementById('kb-query');
+  const answerCard = document.getElementById('kb-answer-card');
+  const answerText = document.getElementById('kb-answer-text');
+  const answerSources = document.getElementById('kb-answer-sources');
+  const answerCta = document.getElementById('kb-answer-cta');
+  const articleUrlTemplate = '{{ url_for('kb_article', article_id=0) }}';
+  const fallback = {{ fallback_answer|tojson }};
+
+  if (!form) {
+    return;
+  }
+
+  form.addEventListener('submit', async function(event) {
+    event.preventDefault();
+    const query = (input.value || '').trim();
+    if (!query) {
+      input.focus();
+      return;
+    }
+
+    answerCard.classList.remove('d-none');
+    answerText.textContent = 'Thinking…';
+    answerSources.textContent = '';
+    answerCta.classList.add('d-none');
+
+    try {
+      const response = await fetch('{{ url_for('kb_ask') }}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({ query })
+      });
+
+      const payload = await response.json();
+      const results = Array.isArray(payload.results) ? payload.results : [];
+
+      answerText.textContent = (payload.answer || '').trim() || fallback;
+      answerSources.textContent = '';
+
+      if (!response.ok || !results.length) {
+        answerCta.classList.remove('d-none');
+      } else {
+        answerCta.classList.add('d-none');
+      }
+
+      if (results.length) {
+        const label = document.createElement('span');
+        label.textContent = 'Based on: ';
+        answerSources.appendChild(label);
+
+        results.forEach(function(result, index) {
+          if (!result || typeof result.id === 'undefined') {
+            return;
+          }
+          const link = document.createElement('a');
+          const articleId = String(result.id);
+          link.href = articleUrlTemplate.replace(/0$/, articleId);
+          link.className = 'me-2';
+          link.textContent = result.title || ('Article ' + articleId);
+          answerSources.appendChild(link);
+        });
+      }
+    } catch (error) {
+      answerText.textContent = fallback;
+      answerCta.classList.remove('d-none');
+    }
+  });
+})();
+</script>
+{% endblock %}
+"""
+
+
+KB_ARTICLE_HTML = """
+{% extends 'base.html' %}
+{% block workspace_content %}
+<div class="surface-card p-4 p-md-5">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-start gap-3 mb-4">
+    <div>
+      <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-life-preserver"></i> Knowledge Base</span>
+      <h1 class="h3 fw-semibold mt-3 mb-2">{{ article.title }}</h1>
+      <p class="text-secondary mb-0">{{ article.summary }}</p>
+    </div>
+    <a class="btn btn-outline-dark" href="{{ url_for('kb') }}"><i class="bi bi-arrow-left"></i> Back to Knowledge Base</a>
+  </div>
+
+  {% if article.tags %}
+  <div class="d-flex flex-wrap gap-2 mb-4">
+    {% for tag in article.tags.split(',') if tag.strip() %}
+    <span class="badge bg-light text-dark border">{{ tag.strip() }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="mb-5">
+    <h2 class="h6 text-uppercase text-secondary fw-semibold">Resolution</h2>
+    <div class="mt-2 text-secondary">{{ article.body|replace('\n', '<br>')|safe }}</div>
+  </div>
+
+  <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+    <div class="text-secondary small">
+      <span class="me-3"><i class="bi bi-hand-thumbs-up"></i> Helpful: {{ article.helpful_up or 0 }}</span>
+      <span><i class="bi bi-hand-thumbs-down"></i> Not helpful: {{ article.helpful_down or 0 }}</span>
+    </div>
+    <form method="post" action="{{ url_for('kb_article_vote', article_id=article.id) }}" class="d-flex gap-2">
+      <button class="btn btn-outline-success" type="submit" name="vote" value="up"><i class="bi bi-hand-thumbs-up"></i> Helpful</button>
+      <button class="btn btn-outline-danger" type="submit" name="vote" value="down"><i class="bi bi-hand-thumbs-down"></i> Not Helpful</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
 # --------------------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------------------
@@ -1900,6 +2231,153 @@ HOME_HTML = """
 @app.route("/")
 def home():
     return render_template_string(HOME_HTML)
+
+
+@app.route("/kb")
+@login_required
+def kb():
+    with app.app_context():
+        init_db()
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, title, summary, body, tags, helpful_up, helpful_down
+        FROM kb_articles
+        ORDER BY helpful_up DESC, helpful_down ASC, datetime(created_at) DESC, id DESC
+        """
+    ).fetchall()
+    articles = [dict(row) for row in rows]
+    return render_template_string(
+        KB_HTML,
+        articles=articles,
+        fallback_answer=_kb_unavailable_message(),
+    )
+
+
+@app.route("/kb/ask", methods=["POST"])
+@login_required
+def kb_ask():
+    payload = request.get_json(silent=True) or {}
+    query = (payload.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "Query is required."}), 400
+
+    with app.app_context():
+        init_db()
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT a.id, a.title, a.summary, a.body, a.tags, a.helpful_up, a.helpful_down, e.embedding_json
+        FROM kb_articles AS a
+        INNER JOIN kb_embeddings AS e ON e.article_id = a.id
+        """
+    ).fetchall()
+
+    articles_with_vectors: list[tuple[sqlite3.Row, list[float]]] = []
+    for row in rows:
+        vector = _load_embedding(row["embedding_json"])
+        if vector:
+            articles_with_vectors.append((row, vector))
+
+    if not articles_with_vectors:
+        return jsonify({"answer": _kb_unavailable_message(), "results": []})
+
+    try:
+        query_embedding = embed_text(query)
+    except OpenAIServiceError as exc:
+        app.logger.warning("Embedding failed: %s", exc)
+        return jsonify({"answer": _kb_unavailable_message(), "results": []})
+
+    scored: list[tuple[float, sqlite3.Row]] = []
+    for row, vector in articles_with_vectors:
+        score = cosine_similarity(query_embedding, vector)
+        if score <= 0:
+            continue
+        scored.append((score, row))
+
+    if not scored:
+        return jsonify({"answer": _kb_unavailable_message(), "results": []})
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    relevant = [item for item in scored if item[0] >= KB_RELEVANCE_THRESHOLD][:KB_MAX_CONTEXT_ARTICLES]
+
+    if not relevant:
+        return jsonify({"answer": _kb_unavailable_message(), "results": []})
+
+    context_parts: list[str] = []
+    results_payload: list[dict[str, object]] = []
+    for score, row in relevant:
+        snippet = _truncate_body(row["body"])
+        context_parts.append(
+            f"Title: {row['title']}\nSummary: {row['summary']}\nDetails: {snippet}"
+        )
+        results_payload.append(
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "summary": row["summary"],
+                "score": round(float(score), 4),
+            }
+        )
+
+    context = "\n\n".join(context_parts)
+    try:
+        answer = generate_answer(query, context)
+    except OpenAIServiceError as exc:
+        app.logger.warning("Answer generation failed: %s", exc)
+        answer = _kb_unavailable_message()
+
+    if not answer:
+        answer = _kb_unavailable_message()
+
+    return jsonify({"answer": answer, "results": results_payload})
+
+
+@app.route("/kb/article/<int:article_id>")
+@login_required
+def kb_article(article_id: int):
+    with app.app_context():
+        init_db()
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id, title, summary, body, tags, helpful_up, helpful_down
+        FROM kb_articles
+        WHERE id = ?
+        """,
+        (article_id,),
+    ).fetchone()
+    if not row:
+        flash("Knowledge base article not found.")
+        return redirect(url_for("kb"))
+    return render_template_string(
+        KB_ARTICLE_HTML,
+        article=dict(row),
+    )
+
+
+@app.route("/kb/article/<int:article_id>/vote", methods=["POST"])
+@login_required
+def kb_article_vote(article_id: int):
+    vote = request.form.get("vote")
+    if vote not in {"up", "down"}:
+        flash("Select whether the article was helpful or not.")
+        return redirect(url_for("kb_article", article_id=article_id))
+
+    with app.app_context():
+        init_db()
+    db = get_db()
+    column = "helpful_up" if vote == "up" else "helpful_down"
+    result = db.execute(
+        f"UPDATE kb_articles SET {column} = {column} + 1 WHERE id = ?",
+        (article_id,),
+    )
+    if result.rowcount == 0:
+        flash("Knowledge base article not found.")
+        return redirect(url_for("kb"))
+    db.commit()
+    flash("Thanks for letting us know!")
+    return redirect(url_for("kb_article", article_id=article_id))
 
 @app.route("/tickets")
 @login_required
@@ -2545,6 +3023,8 @@ def logout():
 app.jinja_loader = DictLoader({
     "base.html": BASE_HTML,
     "home.html": HOME_HTML,   # ← add this line
+    "kb.html": KB_HTML,
+    "kb_article.html": KB_ARTICLE_HTML,
     "dashboard.html": DASHBOARD_HTML,
     "new.html": NEW_HTML,
     "detail.html": DETAIL_HTML,
