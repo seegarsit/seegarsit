@@ -1325,7 +1325,7 @@ BASE_HTML = """
         <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
         <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
         <a class="nav-pill {% if request.endpoint in ('kb_page', 'kb_article') %}active{% endif %}" href="{{ url_for('kb_page') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
-        {% if admin %}
+        {% if session.get('user') %}
         <a class="nav-pill {% if request.endpoint == 'feedback_analytics' %}active{% endif %}" href="{{ url_for('feedback_analytics') }}"><i class="bi bi-chat-dots"></i>Feedback</a>
         {% endif %}
       </div>
@@ -2612,6 +2612,7 @@ def kb_page():
         fallback_answer=_kb_unavailable_message(),
         recent_queries=recent_queries,
         format_ts=format_timestamp,
+        admin=admin,
     )
 
 
@@ -3067,6 +3068,7 @@ def tickets():
 @login_required
 def new_ticket():
     init_db()
+    admin = is_admin_user()
     if request.method == "POST":
         data = {k: (request.form.get(k) or "").strip() for k in [
             "title", "description", "requester_name", "requester_email", "branch", "priority", "category"
@@ -3179,6 +3181,7 @@ def new_ticket():
         branches=BRANCHES,
         categories=CATEGORIES,
         attachment_limit=format_file_size(MAX_ATTACHMENT_TOTAL_BYTES),
+        admin=admin,
     )
 
 
