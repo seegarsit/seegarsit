@@ -581,7 +581,10 @@ FEEDBACK_RATING_OPTIONS = [
 def _load_admin_emails() -> set[str]:
     """Return the set of admin email addresses configured for the app."""
 
-    raw = os.getenv("ADMIN_EMAILS", "brad@seegarsfence.com")
+    raw = os.getenv(
+        "ADMIN_EMAILS",
+        "brad@seegarsfence.com,winston@seegarsfence.com",
+    )
     emails = {item.strip().lower() for item in raw.split(",") if item.strip()}
     return emails
 
