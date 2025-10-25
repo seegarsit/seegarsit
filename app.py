@@ -690,6 +690,94 @@ BASE_HTML = """
     .priority-medium { background: rgba(188,213,49,0.28); color: #4d4f12; }
     .priority-low { background: rgba(35,31,32,0.12); color: var(--sg-black); }
 
+    .tour-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(35,31,32,0.55);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 1050;
+    }
+
+    .tour-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .tour-highlight {
+      position: relative;
+      z-index: 1056 !important;
+      box-shadow: 0 0 0 4px rgba(188,213,49,0.55), 0 18px 35px rgba(0,0,0,0.25);
+      border-radius: 16px;
+      transition: box-shadow 0.25s ease;
+    }
+
+    .tour-tooltip {
+      position: absolute;
+      z-index: 1060;
+      background: var(--sg-surface);
+      border-radius: 18px;
+      padding: 1.1rem 1.35rem;
+      box-shadow: var(--sg-shadow);
+      max-width: 320px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .tour-tooltip.active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .tour-tooltip h5 {
+      font-size: 1rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .tour-tooltip p {
+      font-size: 0.9rem;
+      margin-bottom: 0.85rem;
+      color: rgba(35,31,32,0.72);
+    }
+
+    .tour-controls {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    .tour-progress {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: rgba(35,31,32,0.6);
+      font-weight: 600;
+    }
+
+    .tour-skip {
+      background: none;
+      border: none;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: rgba(35,31,32,0.55);
+      font-weight: 600;
+    }
+
+    .tour-skip:hover,
+    .tour-skip:focus {
+      color: var(--sg-green);
+    }
+
+    @media (max-width: 575.98px) {
+      .tour-tooltip {
+        max-width: calc(100vw - 2rem);
+      }
+    }
+
     .badge-open { background: rgba(0,135,82,0.12); color: var(--sg-green); }
     .badge-progress { background: rgba(188,213,49,0.15); color: #505115; }
     .badge-waiting { background: rgba(255,193,7,0.18); color: #8a6d00; }
@@ -1153,13 +1241,13 @@ NEW_HTML = """
         <div class="d-flex flex-column gap-3">
           <div>
             <label class="form-label fw-semibold">Title</label>
-            <input name="title" class="form-control" placeholder="Example: AccountMate won’t open" required>
+            <input name="title" class="form-control" placeholder="Example: AccountMate won’t open" required data-tour-step="title">
           </div>
           <div>
             <label class="form-label fw-semibold">What’s happening?</label>
-            <textarea name="description" class="form-control" rows="6" placeholder="Share clear details, steps, and any error messages." required></textarea>
+            <textarea name="description" class="form-control" rows="6" placeholder="Share clear details, steps, and any error messages." required data-tour-step="description"></textarea>
           </div>
-          <div class="row g-3">
+          <div class="row g-3" data-tour-step="contact">
             <div class="col-md-6">
               <label class="form-label fw-semibold">Your name</label>
               <input name="requester_name" class="form-control" placeholder="First and last name">
@@ -1176,13 +1264,13 @@ NEW_HTML = """
           <h5 class="fw-semibold mb-3">Triage details</h5>
           <div class="mb-3">
             <label class="form-label text-uppercase small">Priority</label>
-            <select name="priority" class="form-select">
+            <select name="priority" class="form-select" data-tour-step="priority">
               {% for option in priorities %}
               <option value="{{ option }}" {% if option == 'Medium' %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
             </select>
           </div>
-          <div class="mb-3">
+          <div class="mb-3" data-tour-step="branch">
             <label class="form-label text-uppercase small">Branch</label>
             <select name="branch" class="form-select">
               <option value="">Select a branch…</option>
@@ -1200,7 +1288,7 @@ NEW_HTML = """
               {% endfor %}
             </select>
           </div>
-          <div class="mb-3">
+          <div class="mb-3" data-tour-step="attachments">
             <label class="form-label text-uppercase small">Attachments</label>
             <input type="file" id="attachments" name="attachments" class="form-control" multiple hidden>
             <div class="d-flex flex-wrap align-items-center gap-2">
@@ -1217,19 +1305,23 @@ NEW_HTML = """
     </div>
     <div class="d-flex flex-wrap gap-3 justify-content-end">
       <a class="btn btn-outline-dark" href="{{ url_for('tickets') }}">Cancel</a>
-      <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-send"></i>Submit ticket</button>
+      <button class="btn btn-primary d-flex align-items-center gap-2" type="submit" data-tour-step="submit"><i class="bi bi-send"></i>Submit ticket</button>
     </div>
   </form>
   <script>
-    const attachmentInput = document.getElementById('attachments');
-    const attachmentList = document.getElementById('attachment-list');
-    if (attachmentInput && attachmentList) {
+    (function () {
+      const attachmentInput = document.getElementById('attachments');
+      const attachmentList = document.getElementById('attachment-list');
+      if (!attachmentInput || !attachmentList) {
+        return;
+      }
       attachmentInput.addEventListener('change', () => {
         attachmentList.innerHTML = '';
-        if (!attachmentInput.files || attachmentInput.files.length === 0) {
+        const { files } = attachmentInput;
+        if (!files || files.length === 0) {
           return;
         }
-        Array.from(attachmentInput.files).forEach((file) => {
+        Array.from(files).forEach((file) => {
           const item = document.createElement('li');
           item.className = 'd-flex align-items-center gap-2';
           const icon = document.createElement('i');
@@ -1240,7 +1332,260 @@ NEW_HTML = """
           attachmentList.appendChild(item);
         });
       });
-    }
+    })();
+
+    (function () {
+      const user = {{ (session.get('user') or {})|tojson }};
+      if (!user || !user.email) {
+        return;
+      }
+      const storageKey = `seegars-ticket-tour:${String(user.email).toLowerCase()}`;
+      const params = new URLSearchParams(window.location.search);
+      const forceTour = params.get('tour') === '1';
+
+      let storageAvailable = true;
+      try {
+        const probeKey = '__seegars_ticket_tour_probe__';
+        localStorage.setItem(probeKey, '1');
+        localStorage.removeItem(probeKey);
+      } catch (err) {
+        storageAvailable = false;
+      }
+
+      let seenAlready = false;
+      if (storageAvailable) {
+        try {
+          seenAlready = Boolean(localStorage.getItem(storageKey));
+        } catch (err) {
+          seenAlready = false;
+        }
+      }
+
+      if (!forceTour && seenAlready) {
+        return;
+      }
+
+      const steps = [
+        {
+          selector: "[data-tour-step='title']",
+          title: 'Title your request',
+          text: 'Start with a short subject so the IT team can immediately recognize the problem.'
+        },
+        {
+          selector: "[data-tour-step='description']",
+          title: 'Explain what’s happening',
+          text: 'Share the symptoms, steps you have tried, and any error messages so we can help faster.'
+        },
+        {
+          selector: "[data-tour-step='contact']",
+          title: 'Let us know who to reach',
+          text: 'Add your name and email so updates and resolutions go straight to you.'
+        },
+        {
+          selector: "[data-tour-step='priority']",
+          title: 'Set the urgency',
+          text: 'Pick the priority that matches business impact. We will triage based on what you choose.'
+        },
+        {
+          selector: "[data-tour-step='branch']",
+          title: 'Tell us where you are',
+          text: 'Select your branch so the right regional resources are looped in automatically.'
+        },
+        {
+          selector: "[data-tour-step='attachments']",
+          title: 'Add supporting files',
+          text: 'Screenshots, logs, or documents can be attached here to give the team extra context.'
+        },
+        {
+          selector: "[data-tour-step='submit']",
+          title: 'Submit your ticket',
+          text: 'When everything looks good, send it to Seegars IT and we’ll get to work right away.'
+        }
+      ];
+
+      let overlay;
+      let tooltip;
+      let progressEl;
+      let titleEl;
+      let textEl;
+      let backBtn;
+      let nextBtn;
+      let skipBtn;
+      let currentIndex = -1;
+      let currentTarget = null;
+      let rafHandle = 0;
+
+      function buildUi() {
+        overlay = document.createElement('div');
+        overlay.className = 'tour-overlay';
+        tooltip = document.createElement('div');
+        tooltip.className = 'tour-tooltip';
+        tooltip.innerHTML = `
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="tour-progress"></span>
+            <button type="button" class="tour-skip">Skip tour</button>
+          </div>
+          <h5 class="tour-title mb-1"></h5>
+          <p class="tour-text mb-0"></p>
+          <div class="tour-controls mt-3">
+            <button type="button" class="btn btn-outline-dark btn-sm tour-back">Back</button>
+            <button type="button" class="btn btn-primary btn-sm tour-next">Next</button>
+          </div>
+        `;
+        document.body.append(overlay, tooltip);
+
+        progressEl = tooltip.querySelector('.tour-progress');
+        titleEl = tooltip.querySelector('.tour-title');
+        textEl = tooltip.querySelector('.tour-text');
+        backBtn = tooltip.querySelector('.tour-back');
+        nextBtn = tooltip.querySelector('.tour-next');
+        skipBtn = tooltip.querySelector('.tour-skip');
+
+        backBtn.addEventListener('click', () => goToStep(currentIndex - 1));
+        nextBtn.addEventListener('click', () => {
+          if (currentIndex >= steps.length - 1) {
+            endTour(true);
+          } else {
+            goToStep(currentIndex + 1);
+          }
+        });
+
+        const skipTour = () => endTour(true);
+        skipBtn.addEventListener('click', skipTour);
+        overlay.addEventListener('click', skipTour);
+      }
+
+      function refreshPosition() {
+        if (!currentTarget) {
+          return;
+        }
+        if (rafHandle) {
+          cancelAnimationFrame(rafHandle);
+        }
+        rafHandle = requestAnimationFrame(() => {
+          positionTooltip(currentTarget);
+        });
+      }
+
+      function positionTooltip(target) {
+        const rect = target.getBoundingClientRect();
+        const tooltipRect = tooltip.getBoundingClientRect();
+        const viewportTop = window.scrollY + 20;
+        const viewportBottom = window.scrollY + window.innerHeight - 20;
+
+        let top = rect.bottom + 16 + window.scrollY;
+        let left = rect.left + rect.width / 2 - tooltipRect.width / 2 + window.scrollX;
+
+        if (top + tooltipRect.height > viewportBottom) {
+          top = rect.top + window.scrollY - tooltipRect.height - 16;
+        }
+
+        if (top < viewportTop) {
+          top = viewportTop;
+        }
+
+        const minLeft = window.scrollX + 20;
+        const maxLeft = window.scrollX + window.innerWidth - tooltipRect.width - 20;
+        if (left < minLeft) {
+          left = minLeft;
+        } else if (left > maxLeft) {
+          left = maxLeft;
+        }
+
+        tooltip.style.top = `${top}px`;
+        tooltip.style.left = `${left}px`;
+      }
+
+      function clearHighlight() {
+        if (!currentTarget) {
+          return;
+        }
+        currentTarget.classList.remove('tour-highlight');
+        currentTarget.removeAttribute('data-tour-active');
+        currentTarget = null;
+      }
+
+      function goToStep(index) {
+        if (index < 0) {
+          index = 0;
+        }
+        if (index >= steps.length) {
+          endTour(true);
+          return;
+        }
+
+        const step = steps[index];
+        const target = document.querySelector(step.selector);
+
+        if (!target) {
+          const direction = index > currentIndex ? 1 : -1;
+          const nextIndex = index + direction;
+          if (nextIndex >= 0 && nextIndex < steps.length) {
+            goToStep(nextIndex);
+            return;
+          }
+          endTour(true);
+          return;
+        }
+
+        clearHighlight();
+
+        currentIndex = index;
+        currentTarget = target;
+        currentTarget.setAttribute('data-tour-active', 'true');
+        currentTarget.classList.add('tour-highlight');
+
+        progressEl.textContent = `Step ${index + 1} of ${steps.length}`;
+        titleEl.textContent = step.title;
+        textEl.textContent = step.text;
+        backBtn.disabled = index === 0;
+        nextBtn.textContent = index === steps.length - 1 ? 'Finish' : 'Next';
+
+        overlay.classList.add('active');
+        tooltip.classList.add('active');
+
+        currentTarget.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        refreshPosition();
+        setTimeout(refreshPosition, 350);
+      }
+
+      function endTour(markSeen) {
+        window.removeEventListener('resize', refreshPosition, true);
+        window.removeEventListener('scroll', refreshPosition, true);
+        clearHighlight();
+        overlay.classList.remove('active');
+        tooltip.classList.remove('active');
+        setTimeout(() => {
+          overlay.remove();
+          tooltip.remove();
+        }, 220);
+        if (markSeen && storageAvailable) {
+          try {
+            localStorage.setItem(storageKey, String(Date.now()));
+          } catch (err) {
+            /* no-op */
+          }
+        }
+      }
+
+      function startTour() {
+        if (!steps.length) {
+          return;
+        }
+        buildUi();
+        tooltip.style.visibility = 'hidden';
+        goToStep(0);
+        tooltip.style.visibility = '';
+        window.addEventListener('resize', refreshPosition, true);
+        window.addEventListener('scroll', refreshPosition, true);
+      }
+
+      if (document.readyState === 'complete') {
+        setTimeout(startTour, forceTour ? 50 : 350);
+      } else {
+        window.addEventListener('load', () => setTimeout(startTour, forceTour ? 50 : 350));
+      }
+    })();
   </script>
 </div>
 {% endblock %}
