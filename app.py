@@ -209,7 +209,15 @@ CATEGORIES = [
     "Other",
 ]
 
-ADMIN_EMAILS = {"brad@seegarsfence.com"}
+def _load_admin_emails() -> set[str]:
+    """Return the set of admin email addresses configured for the app."""
+
+    raw = os.getenv("ADMIN_EMAILS", "brad@seegarsfence.com")
+    emails = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return emails
+
+
+ADMIN_EMAILS = _load_admin_emails()
 
 def now_ts():
     return datetime.now(timezone.utc).isoformat()
