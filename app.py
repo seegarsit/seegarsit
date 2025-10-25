@@ -1292,6 +1292,25 @@ DASHBOARD_HTML = """
         {% endfor %}
       </div>
     </div>
+    <div class="surface-card p-4 mt-4">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h5 class="mb-0">Top Knowledge</h5>
+        <span class="badge-chip badge-open"><i class="bi bi-journal-text"></i>{{ kb_top_articles|length }}</span>
+      </div>
+      <div class="d-flex flex-column gap-3">
+        {% for article in kb_top_articles %}
+        <div class="d-flex align-items-start justify-content-between gap-3">
+          <div>
+            <a class="fw-semibold small" href="{{ url_for('kb_article', article_id=article.id) }}">{{ article.title }}</a>
+            <div class="text-secondary small">{{ format_ts(article.created_at) }}</div>
+          </div>
+          <span class="badge-chip badge-complete"><i class="bi bi-hand-thumbs-up"></i>{{ article.helpful_up }}</span>
+        </div>
+        {% else %}
+        <p class="text-secondary small mb-0">No knowledge base content yet. Close a few tickets with solid write-ups to seed the library.</p>
+        {% endfor %}
+      </div>
+    </div>
     {% endif %}
   </div>
   <div class="col-lg-8 col-xl-9">
@@ -2417,6 +2436,7 @@ def tickets():
                 status_badges=STATUS_BADGES,
                 priority_badges=PRIORITY_BADGES,
                 feedback_entries=[],
+                kb_top_articles=[],
             )
 
     sql += " ORDER BY datetime(created_at) DESC, id DESC"
@@ -2440,6 +2460,7 @@ def tickets():
     stats = {"total": total, "open": open_count, "completed": completed}
 
     feedback_entries: list[dict[str, object]] = []
+    kb_top_articles: list[dict[str, object]] = []
     if admin:
         feedback_rows = db.execute(
             """
@@ -2454,6 +2475,16 @@ def tickets():
         ).fetchall()
         feedback_entries = [dict(row) for row in feedback_rows]
 
+        kb_rows = db.execute(
+            """
+            SELECT id, title, helpful_up, CAST(created_at AS TEXT) AS created_at
+            FROM kb_articles
+            ORDER BY helpful_up DESC, datetime(created_at) DESC, id DESC
+            LIMIT 5
+            """
+        ).fetchall()
+        kb_top_articles = [dict(row) for row in kb_rows]
+
     return render_template_string(
         DASHBOARD_HTML,
         tickets=tickets,
@@ -2467,6 +2498,7 @@ def tickets():
         status_badges=STATUS_BADGES,
         priority_badges=PRIORITY_BADGES,
         feedback_entries=feedback_entries,
+        kb_top_articles=kb_top_articles,
     )
 
 
