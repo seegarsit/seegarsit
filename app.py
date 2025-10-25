@@ -3427,17 +3427,11 @@ def update_assignee(ticket_id: int):
 def ticket_feedback(ticket_id: int):
     with app.app_context():
         init_db()
-    db = get_db()
+    session: Session = get_session()
     token = (request.values.get("token") or "").strip()
-    ticket_row = db.execute(
-        """
-        SELECT id, title, requester_name, feedback_token
-        FROM tickets
-        WHERE id = ?
-        """,
-        (ticket_id,),
-    ).fetchone()
-    if not ticket_row:
+
+    ticket = session.get(Ticket, ticket_id)
+    if not ticket:
         return (
             render_template_string(
                 FEEDBACK_HTML,
@@ -3455,13 +3449,23 @@ def ticket_feedback(ticket_id: int):
             404,
         )
 
-    expected_token = ticket_row["feedback_token"] or ensure_ticket_feedback_token(ticket_id, db=db)
+    expected_token = ticket.feedback_token or generate_feedback_token()
+    if not ticket.feedback_token:
+        ticket.feedback_token = expected_token
+        session.commit()
+
+    ticket_data = {
+        "id": ticket.id,
+        "title": ticket.title,
+        "requester_name": ticket.requester_name,
+        "feedback_token": ticket.feedback_token,
+    }
     ticket_link = ticket_detail_link(ticket_id)
     if not token or token != expected_token:
         return (
             render_template_string(
                 FEEDBACK_HTML,
-                ticket=dict(ticket_row),
+                ticket=ticket_data,
                 show_form=False,
                 submitted=False,
                 error="This feedback link is no longer valid.",
@@ -3490,7 +3494,7 @@ def ticket_feedback(ticket_id: int):
         if not rating and not comments:
             return render_template_string(
                 FEEDBACK_HTML,
-                ticket=dict(ticket_row),
+                ticket=ticket_data,
                 show_form=True,
                 submitted=False,
                 error="Please select a rating or leave a comment.",
@@ -3501,17 +3505,19 @@ def ticket_feedback(ticket_id: int):
                 token=token,
                 ticket_link=ticket_link,
             )
-        db.execute(
-            """
-            INSERT INTO ticket_feedback (ticket_id, rating, comments, submitted_by, submitted_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (ticket_id, rating, comments or None, submitted_by or None, now_ts()),
+        session.add(
+            TicketFeedback(
+                ticket_id=ticket.id,
+                rating=rating,
+                comments=comments or None,
+                submitted_by=submitted_by or None,
+                submitted_at=now_ts(),
+            )
         )
-        db.commit()
+        session.commit()
         return render_template_string(
             FEEDBACK_HTML,
-            ticket=dict(ticket_row),
+            ticket=ticket_data,
             show_form=False,
             submitted=True,
             error=None,
@@ -3525,7 +3531,7 @@ def ticket_feedback(ticket_id: int):
 
     return render_template_string(
         FEEDBACK_HTML,
-        ticket=dict(ticket_row),
+        ticket=ticket_data,
         show_form=True,
         submitted=False,
         error=None,
