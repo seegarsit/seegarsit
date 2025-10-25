@@ -49,6 +49,7 @@ from sqlalchemy import (
     func,
     select,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import (
     Session,
     declarative_base,
@@ -526,6 +527,21 @@ def close_connection(exception: Optional[BaseException]):  # noqa: ARG001
 
 
 def init_db():
+    global engine
+    if not DATABASE_URL:
+        try:
+            current_db = Path(engine.url.database or "").resolve()
+        except Exception:
+            current_db = None
+        target_db = Path(DB_PATH).resolve()
+        if current_db != target_db:
+            engine.dispose()
+            engine = create_engine(
+                f"sqlite:///{DB_PATH}",
+                connect_args={"check_same_thread": False},
+            )
+            SessionLocal.configure(bind=engine)
+
     db = get_db()
     db.executescript(
         """
@@ -1325,8 +1341,11 @@ BASE_HTML = """
         <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
         <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
         <a class="nav-pill {% if request.endpoint in ('kb_page', 'kb_article') %}active{% endif %}" href="{{ url_for('kb_page') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
-        {% if session.get('user') and (session['user']['email']|lower in ADMIN_EMAILS) %}
-        <a class="nav-pill {% if request.endpoint == 'feedback_analytics' %}active{% endif %}" href="{{ url_for('feedback_analytics') }}"><i class="bi bi-chat-dots"></i>Feedback</a>
+        {% if is_admin_user() %}
+        <a class="nav-pill {% if request.endpoint == 'feedback_analytics' %}active{% endif %}"
+           href="{{ url_for('feedback_analytics') }}">
+           <i class="bi bi-chat-heart"></i> Feedback
+        </a>
         {% endif %}
       </div>
     </aside>
@@ -2712,66 +2731,94 @@ def kb_ask():
 @login_required
 def feedback_analytics():
     admin = is_admin_user()
-
     session: Session = get_session()
     try:
         user_email = (current_user_email() or "").lower().strip()
+
+        # Non-admins must have an email to match
         if not admin and not user_email:
-            star_counts_empty = {s: 0 for s in range(1, 6)}
+            app.logger.warning("Feedback page: no email in session; returning empty analytics.")
+            empty = {s: 0 for s in range(1, 6)}
             return render_template_string(
                 FEEDBACK_ANALYTICS_HTML,
-                entries=[],
-                avg_rating="0.0",
-                total_feedbacks=0,
-                star_counts=star_counts_empty,
-                requester_options=[],
-                branches=BRANCHES,
-                categories=CATEGORIES,
-                selected_requester="",
-                selected_branch="",
-                selected_category="",
-                filters_applied=[],
-                format_ts=format_timestamp,
-                branch_options=BRANCHES,
-                category_options=CATEGORIES,
-                show_requester_filter=admin,
-                rated_count=0,
-                max_star_count=0,
-                results_count=0,
-                admin=admin,
+                entries=[], avg_rating="0.0", total_feedbacks=0,
+                star_counts=empty, requester_options=[],
+                branches=BRANCHES, categories=CATEGORIES,
+                selected_requester="", selected_branch="",
+                selected_category="", filters_applied=[],
+                format_ts=format_timestamp
             )
 
-        filters: list = []
+        # ----- Build filter base -----
+        filters = []
         if not admin:
             filters.append(func.lower(Ticket.requester_email) == user_email)
 
-        requester_options: list[str] = []
-        if admin:
-            requester_query = (
+        # ----- Build option dropdowns -----
+        requester_options, branch_options, category_options = [], [], []
+
+        # REQUESTERS (case-insensitive sort, Postgres-safe)
+        try:
+            rq = (
                 session.query(Ticket.requester_email)
                 .filter(
                     Ticket.requester_email.isnot(None),
-                    func.trim(Ticket.requester_email) != "",
+                    func.trim(Ticket.requester_email) != ""
                 )
-                .distinct()
+                .group_by(Ticket.requester_email)
                 .order_by(func.lower(Ticket.requester_email))
             )
-            requester_options = [row[0] for row in requester_query.all() if row[0]]
+            requester_options = [r[0] for r in rq.all() if r[0]]
+        except SQLAlchemyError as e:
+            app.logger.exception("Failed building requester options: %s", e)
 
+        # BRANCHES
+        try:
+            bq = (
+                session.query(Ticket.branch)
+                .filter(
+                    Ticket.branch.isnot(None),
+                    func.trim(Ticket.branch) != ""
+                )
+                .group_by(Ticket.branch)
+                .order_by(func.lower(Ticket.branch))
+            )
+            branch_options = [b[0] for b in bq.all() if b[0]]
+        except SQLAlchemyError as e:
+            app.logger.exception("Failed building branch options: %s", e)
+
+        # CATEGORIES
+        try:
+            cq = (
+                session.query(Ticket.category)
+                .filter(
+                    Ticket.category.isnot(None),
+                    func.trim(Ticket.category) != ""
+                )
+                .group_by(Ticket.category)
+                .order_by(func.lower(Ticket.category))
+            )
+            category_options = [c[0] for c in cq.all() if c[0]]
+        except SQLAlchemyError as e:
+            app.logger.exception("Failed building category options: %s", e)
+
+        # ----- Parse filters -----
         requester_filter = (request.args.get("requester_email") or "").strip()
         branch_filter = (request.args.get("branch") or "").strip()
         category_filter = (request.args.get("category") or "").strip()
 
-        selected_requester = ""
+        selected_requester, selected_branch, selected_category = "", "", ""
         if admin and requester_filter:
+            # Only admins can choose requesters
             lookup = requester_filter.lower()
-            for option in requester_options:
-                if option and option.lower() == lookup:
-                    selected_requester = option
+            for opt in requester_options:
+                if opt and opt.lower() == lookup:
+                    selected_requester = opt
                     break
-
-        selected_branch = branch_filter if branch_filter in BRANCHES else ""
-        selected_category = category_filter if category_filter in CATEGORIES else ""
+        if branch_filter in BRANCHES:
+            selected_branch = branch_filter
+        if category_filter in CATEGORIES:
+            selected_category = category_filter
 
         if selected_requester:
             filters.append(func.lower(Ticket.requester_email) == func.lower(selected_requester))
@@ -2780,10 +2827,11 @@ def feedback_analytics():
         if selected_category:
             filters.append(Ticket.category == selected_category)
 
+        # ----- Aggregate stats -----
         agg = (
             session.query(
                 func.count(TicketFeedback.id),
-                func.avg(func.nullif(TicketFeedback.rating, None)),
+                func.avg(func.nullif(TicketFeedback.rating, None))
             )
             .join(Ticket, Ticket.id == TicketFeedback.ticket_id)
             .filter(*filters)
@@ -2792,16 +2840,18 @@ def feedback_analytics():
         avg_val = agg[1]
         avg_rating = f"{avg_val:.1f}" if avg_val is not None else "0.0"
 
-        star_counts: dict[int, int] = {}
-        for star in [5, 4, 3, 2, 1]:
-            count = (
+        # Star counts 5→1
+        star_counts = {}
+        for s in range(5, 0, -1):
+            cnt = (
                 session.query(func.count(TicketFeedback.id))
                 .join(Ticket, Ticket.id == TicketFeedback.ticket_id)
-                .filter(*(filters + [TicketFeedback.rating == star]))
+                .filter(*(filters + [TicketFeedback.rating == s]))
             ).scalar()
-            star_counts[star] = int(count or 0)
+            star_counts[s] = int(cnt or 0)
 
-        entries_query = (
+        # ----- Entries (latest first) -----
+        entries_q = (
             session.query(
                 TicketFeedback.ticket_id,
                 TicketFeedback.rating,
@@ -2817,45 +2867,33 @@ def feedback_analytics():
             .order_by(desc(TicketFeedback.submitted_at), desc(TicketFeedback.id))
             .limit(20)
         )
-        entries: list[dict[str, object]] = []
+        entries = []
         for (
-            ticket_id,
-            rating,
-            comments,
-            submitted_by,
-            submitted_at,
-            title,
-            branch,
-            category,
-        ) in entries_query.all():
-            entries.append(
-                {
-                    "ticket_id": ticket_id,
-                    "rating": rating,
-                    "comments": comments,
-                    "submitted_by": submitted_by,
-                    "submitted_at": submitted_at,
-                    "title": title,
-                    "branch": branch,
-                    "category": category,
-                    "ticket": {
-                        "title": title,
-                        "branch": branch,
-                        "category": category,
-                    },
-                }
-            )
+            tid, rating, comments, submitted_by, submitted_at,
+            title, branch, category
+        ) in entries_q.all():
+            entries.append({
+                "ticket_id": tid,
+                "rating": rating,
+                "comments": comments,
+                "submitted_by": submitted_by,
+                "submitted_at": submitted_at,
+                "title": title,
+                "branch": branch,
+                "category": category,
+            })
 
-        filters_applied: list[tuple[str, str]] = []
+        # ----- Log for debugging -----
+        app.logger.info("FEEDBACKS OK: total=%s avg=%s entries=%s filters=%s",
+                        total_feedbacks, avg_rating, len(entries), filters)
+
+        filters_applied = []
         if selected_requester:
             filters_applied.append(("Requester", selected_requester))
         if selected_branch:
             filters_applied.append(("Branch", selected_branch))
         if selected_category:
             filters_applied.append(("Category", selected_category))
-
-        rated_count = sum(star_counts.values())
-        max_star_count = max(star_counts.values()) if star_counts else 0
 
         return render_template_string(
             FEEDBACK_ANALYTICS_HTML,
@@ -2864,21 +2902,26 @@ def feedback_analytics():
             total_feedbacks=total_feedbacks,
             star_counts=star_counts,
             requester_options=requester_options,
-            branches=BRANCHES,
-            categories=CATEGORIES,
+            branches=branch_options or BRANCHES,
+            categories=category_options or CATEGORIES,
             selected_requester=selected_requester,
             selected_branch=selected_branch,
             selected_category=selected_category,
             filters_applied=filters_applied,
             format_ts=format_timestamp,
-            branch_options=BRANCHES,
-            category_options=CATEGORIES,
-            show_requester_filter=admin,
-            rated_count=rated_count,
-            max_star_count=max_star_count,
-            results_count=len(entries),
-            admin=admin,
         )
+    except Exception as e:
+        app.logger.exception("Feedback analytics failed: %s", e)
+        empty = {s: 0 for s in range(1, 6)}
+        return render_template_string(
+            FEEDBACK_ANALYTICS_HTML,
+            entries=[], avg_rating="0.0", total_feedbacks=0,
+            star_counts=empty, requester_options=[],
+            branches=BRANCHES, categories=CATEGORIES,
+            selected_requester="", selected_branch="",
+            selected_category="", filters_applied=[],
+            format_ts=format_timestamp
+        ), 500
     finally:
         try:
             session.close()
@@ -3695,7 +3738,7 @@ app.jinja_loader = DictLoader({
     "feedback.html": FEEDBACK_HTML,
 })
 
-app.jinja_env.globals.update(ADMIN_EMAILS=ADMIN_EMAILS)
+app.jinja_env.globals.update(ADMIN_EMAILS=ADMIN_EMAILS, is_admin_user=is_admin_user)
 
 # --------------------------------------------------------------------------------------
 # Entrypoint
