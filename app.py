@@ -177,9 +177,9 @@ def embed_text(text: str) -> list[float]:
 
 def generate_answer(question: str, context: str) -> str:
     prompt = (
-        "You are the Seegars IT support assistant. Answer employee questions using only the "
-        "information provided in the knowledge base context. If the context does not contain "
-        "the answer, tell the employee that no documented solution exists and they should create a support ticket."
+        "You are an IT help assistant for Seegars. Only answer workplace IT questions (accounts, email, "
+        "software, devices, network, security). If out of scope, say you can only answer Seegars IT topics "
+        "and suggest creating a ticket."
     )
     payload = {
         "model": OPENAI_CHAT_MODEL,
@@ -202,6 +202,47 @@ def generate_answer(question: str, context: str) -> str:
     except (KeyError, IndexError) as exc:
         raise OpenAIServiceError("Answer missing from OpenAI response.") from exc
     return (answer or "").strip()
+
+
+IT_ALLOWLIST_TERMS = {
+    "network",
+    "wifi",
+    "vpn",
+    "email",
+    "outlook",
+    "account",
+    "login",
+    "printer",
+    "software",
+    "accountmate",
+    "remote desktop",
+    "password",
+    "mfa",
+    "windows",
+    "mac",
+    "laptop",
+    "desktop",
+    "monitor",
+    "teams",
+    "sharepoint",
+}
+
+IT_BLOCKLIST_TERMS = {
+    "recipes",
+    "sports",
+    "politics",
+    "finance",
+    "medical diagnosis",
+}
+
+
+def is_it_question(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return False
+    if any(term in normalized for term in IT_BLOCKLIST_TERMS):
+        return False
+    return any(term in normalized for term in IT_ALLOWLIST_TERMS)
 
 
 def _load_embedding(raw: str | None) -> list[float] | None:
@@ -422,6 +463,15 @@ def init_db():
             created_at TIMESTAMP NOT NULL,
             FOREIGN KEY(article_id) REFERENCES kb_articles(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS kb_queries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT,
+            query TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_kb_queries_created ON kb_queries(created_at);
 
         CREATE INDEX IF NOT EXISTS idx_ticket_feedback_ticket ON ticket_feedback(ticket_id);
 
@@ -1134,12 +1184,8 @@ BASE_HTML = """
         <div class="nav-section-title">Workspace</div>
         <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
         <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
-        <a class="nav-pill {% if request.endpoint in ('kb', 'kb_article') %}active{% endif %}" href="{{ url_for('kb') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
-      </div>
-      <div>
-        <div class="nav-section-title">Shortcuts</div>
-        <div class="filter-pill"><i class="bi bi-funnel"></i>Saved Views</div>
-        <div class="filter-pill"><i class="bi bi-lightning"></i>Automation Rules</div>
+        <a class="nav-pill {% if request.endpoint in ('kb_page', 'kb_article') %}active{% endif %}" href="{{ url_for('kb_page') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
+        <a class="nav-pill {% if request.endpoint == 'feedback_analytics' %}active{% endif %}" href="{{ url_for('feedback_analytics') }}"><i class="bi bi-chat-dots"></i>Feedback</a>
       </div>
     </aside>
     <main class="app-content">
@@ -1177,7 +1223,6 @@ DASHBOARD_HTML = """
     <p class="text-secondary mb-0">Monitor ticket health, triage new issues, and keep Seegars teams moving.</p>
   </div>
   <div class="d-flex gap-2 flex-wrap">
-    <button type="button" class="btn btn-outline-dark d-flex align-items-center gap-2"><i class="bi bi-bookmark-star"></i>Save View</button>
     <a class="btn btn-primary d-flex align-items-center gap-2" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-lg"></i>New Ticket</a>
   </div>
 </section>
@@ -1224,167 +1269,128 @@ DASHBOARD_HTML = """
   </div>
 </div>
 
-<div class="row g-4 align-items-start">
-  <div class="col-lg-4 col-xl-3">
-    <div class="filter-panel">
-      <div class="d-flex align-items-center justify-content-between mb-3">
-        <h5 class="mb-0">Quick Filters</h5>
-        <button type="button" class="btn btn-sm btn-outline-dark">Reset</button>
-      </div>
-      <form class="d-flex flex-column gap-3">
-        <div>
-          <label class="form-label small text-uppercase">Search tickets</label>
-          <div class="input-group input-group-sm">
-            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
-            <input type="search" class="form-control border-start-0" placeholder="Search by title or #" disabled>
-          </div>
-        </div>
-        <div>
-          <label class="form-label small text-uppercase">Status</label>
-          <div class="d-flex flex-wrap gap-2">
-            {% for s in statuses %}
-              <span class="filter-pill"><i class="bi bi-circle-fill" style="font-size:0.55rem;"></i>{{ s }}</span>
-            {% endfor %}
-          </div>
-        </div>
-        <div>
-          <label class="form-label small text-uppercase">Priority</label>
-          <div class="d-flex flex-wrap gap-2">
-            {% for p in priorities %}
-              <span class="filter-pill"><i class="bi bi-sliders"></i>{{ p }}</span>
-            {% endfor %}
-          </div>
-        </div>
-        {% if admin %}
-        <div>
-          <label class="form-label small text-uppercase">Branch</label>
-          <div class="d-flex flex-wrap gap-2">
-            {% for b in branches[:6] %}
-              <span class="filter-pill"><i class="bi bi-geo"></i>{{ b }}</span>
-            {% endfor %}
-            {% if branches|length > 6 %}
-              <span class="filter-pill"><i class="bi bi-three-dots"></i>More</span>
-            {% endif %}
-          </div>
-        </div>
-        {% endif %}
-        <div class="text-secondary small">Interactive filtering coming soon — adjust presets above and save your favourite view.</div>
-      </form>
+<div class="surface-card p-4">
+  <form class="row g-3 align-items-end" method="get">
+    <div class="col-12 col-md-6 col-xl-2">
+      <label class="form-label text-uppercase small">Status</label>
+      <select class="form-select" name="status">
+        <option value="">All statuses</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if s == selected_status %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
     </div>
-    {% if admin %}
-    <div class="surface-card p-4 mt-4">
-      <div class="d-flex align-items-center justify-content-between mb-2">
-        <h5 class="mb-0">Recent Feedback</h5>
-        <span class="badge-chip badge-complete"><i class="bi bi-chat-heart"></i>{{ feedback_entries|length }}</span>
-      </div>
-      <div class="d-flex flex-column gap-3">
-        {% for fb in feedback_entries %}
-        <div class="border rounded p-3">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <strong class="small">{{ fb.ticket_title or ('Ticket #' ~ fb.ticket_id) }}</strong>
-            {% if fb.rating %}<span class="text-warning small">{{ fb.rating }}/5</span>{% endif %}
-          </div>
-          <p class="mb-1 small">{{ fb.comments or 'No comments provided.' }}</p>
-          <div class="text-secondary small">{{ format_ts(fb.submitted_at) }}</div>
-        </div>
-        {% else %}
-        <p class="text-secondary small mb-0">Feedback will appear here after tickets close.</p>
+    <div class="col-12 col-md-6 col-xl-2">
+      <label class="form-label text-uppercase small">Priority</label>
+      <select class="form-select" name="priority">
+        <option value="">All priorities</option>
+        {% for p in priorities %}
+        <option value="{{ p }}" {% if p == selected_priority %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-6 col-xl-2">
+      <label class="form-label text-uppercase small">Branch</label>
+      <select class="form-select" name="branch">
+        <option value="">All branches</option>
+        {% for b in branches %}
+        <option value="{{ b }}" {% if b == selected_branch %}selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-6 col-xl-2">
+      <label class="form-label text-uppercase small">Category</label>
+      <select class="form-select" name="category">
+        <option value="">All categories</option>
+        {% for c in categories %}
+        <option value="{{ c }}" {% if c == selected_category %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-6 col-xl-4 d-flex flex-wrap gap-2 justify-content-end">
+      <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-funnel"></i>Filter</button>
+      <a class="btn btn-link text-decoration-none" href="{{ url_for('tickets') }}">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="surface-card p-0 overflow-hidden">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-4 border-bottom border-light-subtle">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <div class="badge-chip badge-open"><i class="bi bi-lightning"></i>{{ tickets|length }} Results</div>
+      {% if filters_applied %}
+      <div class="d-flex flex-wrap gap-2">
+        {% for label, value in filters_applied %}
+        <span class="badge bg-light text-dark border">{{ label }}: {{ value }}</span>
         {% endfor %}
       </div>
+      {% else %}
+      <span class="text-secondary small">Sorted by most recent updates</span>
+      {% endif %}
     </div>
-    <div class="surface-card p-4 mt-4">
-      <div class="d-flex align-items-center justify-content-between mb-2">
-        <h5 class="mb-0">Top Knowledge</h5>
-        <span class="badge-chip badge-open"><i class="bi bi-journal-text"></i>{{ kb_top_articles|length }}</span>
-      </div>
-      <div class="d-flex flex-column gap-3">
-        {% for article in kb_top_articles %}
-        <div class="d-flex align-items-start justify-content-between gap-3">
-          <div>
-            <a class="fw-semibold small" href="{{ url_for('kb_article', article_id=article.id) }}">{{ article.title }}</a>
-            <div class="text-secondary small">{{ format_ts(article.created_at) }}</div>
-          </div>
-          <span class="badge-chip badge-complete"><i class="bi bi-hand-thumbs-up"></i>{{ article.helpful_up }}</span>
-        </div>
-        {% else %}
-        <p class="text-secondary small mb-0">No knowledge base content yet. Close a few tickets with solid write-ups to seed the library.</p>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
+    <button type="button" class="btn btn-sm btn-outline-dark d-flex align-items-center gap-2"><i class="bi bi-cloud-download"></i>Export</button>
   </div>
-  <div class="col-lg-8 col-xl-9">
-    <div class="surface-card p-0 overflow-hidden">
-      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-4 border-bottom border-light-subtle">
-        <div class="d-flex align-items-center gap-3">
-          <div class="badge-chip badge-open"><i class="bi bi-lightning"></i>{{ tickets|length }} Results</div>
-          <span class="text-secondary small">Sorted by most recent updates</span>
-        </div>
-        <button type="button" class="btn btn-sm btn-outline-dark d-flex align-items-center gap-2"><i class="bi bi-cloud-download"></i>Export</button>
-      </div>
-      <div class="table-responsive p-3">
-        <table class="table table-modern align-middle mb-0">
-          <thead>
-            <tr>
-              <th scope="col">Submitted</th>
-              {% if admin %}<th scope="col">Branch</th>{% endif %}
-              <th scope="col">Ticket</th>
-              <th scope="col">Priority</th>
-              <th scope="col">Category</th>
-              <th scope="col">Status</th>
-              <th scope="col">Completed</th>
-              {% if admin %}<th scope="col" class="text-end">Actions</th>{% endif %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for t in tickets %}
-            {% set status = t['status'] or 'Open' %}
-            {% set status_style = status_badges.get(status, status_badges['Open']) %}
-            {% set priority_label = (t['priority'] or 'Medium') %}
-            {% set priority_style = priority_badges.get(priority_label, priority_badges['Medium']) %}
-            <tr>
-              <td><div class="fw-semibold">{{ format_ts(t['created_at']) }}</div><div class="ticket-meta">Updated {{ format_ts(t['updated_at']) }}</div></td>
-              {% if admin %}
-              <td><span class="ticket-title">{{ t['branch'] or '—' }}</span><div class="ticket-meta">{{ t['requester_name'] or 'Unknown' }}</div></td>
-              {% endif %}
-              <td>
-                <div class="ticket-title">{{ t['title'] }}</div>
-                <div class="ticket-meta">#{{ t['id'] }}{% if not admin and t['branch'] %} • {{ t['branch'] }}{% endif %}{% if admin and t['requester_email'] %} • {{ t['requester_email'] }}{% endif %}</div>
-              </td>
-              <td>
-                <span class="{{ priority_style.cls }}"><i class="{{ priority_style.icon }}"></i>{{ priority_label }}</span>
-              </td>
-              <td>{{ t['category'] or '—' }}</td>
-              <td>
-                <span class="{{ status_style.cls }}"><i class="{{ status_style.icon }}"></i>{{ status }}</span>
-              </td>
-              <td>{{ format_ts(t['completed_at']) }}</td>
-              {% if admin %}
-              <td class="text-end">
-                <form class="d-flex flex-wrap gap-2 justify-content-end align-items-center" method="post" action="{{ url_for('update_status', ticket_id=t['id']) }}">
-                  <select name="status" class="form-select form-select-sm" style="min-width: 160px;">
-                    {% for s in statuses %}
-                    <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>
-                    {% endfor %}
-                  </select>
-                  <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-arrow-repeat"></i></button>
-                  <a class="btn btn-sm btn-outline-dark" href="{{ url_for('ticket_detail', ticket_id=t['id']) }}">Details</a>
-                </form>
-              </td>
-              {% endif %}
-            </tr>
-            {% else %}
-            <tr>
-              <td colspan="{% if admin %}8{% else %}7{% endif %}" class="text-center py-5">
-                <div class="fw-semibold mb-2">No tickets yet</div>
-                <p class="text-secondary mb-0">Create your first request to populate the workspace.</p>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+  <div class="table-responsive p-3">
+    <table class="table table-modern align-middle mb-0">
+      <thead>
+        <tr>
+          <th scope="col">Submitted</th>
+          {% if admin %}<th scope="col">Branch</th>{% endif %}
+          <th scope="col">Ticket</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Category</th>
+          <th scope="col">Status</th>
+          <th scope="col">Completed</th>
+          {% if admin %}<th scope="col" class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tickets %}
+        {% set status = t['status'] or 'Open' %}
+        {% set status_style = status_badges.get(status, status_badges['Open']) %}
+        {% set priority_label = (t['priority'] or 'Medium') %}
+        {% set priority_style = priority_badges.get(priority_label, priority_badges['Medium']) %}
+        <tr>
+          <td><div class="fw-semibold">{{ format_ts(t['created_at']) }}</div><div class="ticket-meta">Updated {{ format_ts(t['updated_at']) }}</div></td>
+          {% if admin %}
+          <td><span class="ticket-title">{{ t['branch'] or '—' }}</span><div class="ticket-meta">{{ t['requester_name'] or 'Unknown' }}</div></td>
+          {% endif %}
+          <td>
+            <div class="ticket-title">{{ t['title'] }}</div>
+            <div class="ticket-meta">#{{ t['id'] }}{% if not admin and t['branch'] %} • {{ t['branch'] }}{% endif %}{% if admin and t['requester_email'] %} • {{ t['requester_email'] }}{% endif %}</div>
+          </td>
+          <td>
+            <span class="{{ priority_style.cls }}"><i class="{{ priority_style.icon }}"></i>{{ priority_label }}</span>
+          </td>
+          <td>{{ t['category'] or '—' }}</td>
+          <td>
+            <span class="{{ status_style.cls }}"><i class="{{ status_style.icon }}"></i>{{ status }}</span>
+          </td>
+          <td>{{ format_ts(t['completed_at']) }}</td>
+          {% if admin %}
+          <td class="text-end">
+            <form class="d-flex flex-wrap gap-2 justify-content-end align-items-center" method="post" action="{{ url_for('update_status', ticket_id=t['id']) }}">
+              <select name="status" class="form-select form-select-sm" style="min-width: 160px;">
+                {% for s in statuses %}
+                <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+              <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-arrow-repeat"></i></button>
+              <a class="btn btn-sm btn-outline-dark" href="{{ url_for('ticket_detail', ticket_id=t['id']) }}">Details</a>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="{% if admin %}8{% else %}7{% endif %}" class="text-center py-5">
+            <div class="fw-semibold mb-2">No tickets yet</div>
+            <p class="text-secondary mb-0">Create your first request to populate the workspace.</p>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}
@@ -1937,6 +1943,127 @@ DETAIL_HTML = """
 """
 
 
+FEEDBACK_ANALYTICS_HTML = """
+{% extends 'base.html' %}
+{% block workspace_content %}
+<section class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+  <div>
+    <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-chat-dots"></i> Feedback Insights</span>
+    <h1 class="fw-semibold display-6 mb-2">Experience Report</h1>
+    <p class="text-secondary mb-0">Review requester sentiment, track ratings, and spot trends from recent completions.</p>
+  </div>
+</section>
+
+<div class="surface-card p-4">
+  <form class="row g-3 align-items-end" method="get">
+    <div class="col-12 col-md-4 col-xl-3">
+      <label class="form-label text-uppercase small">Requester</label>
+      <select class="form-select" name="requester_email">
+        <option value="">All requesters</option>
+        {% for requester in requester_options %}
+        <option value="{{ requester }}" {% if requester == selected_requester %}selected{% endif %}>{{ requester }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-4 col-xl-3">
+      <label class="form-label text-uppercase small">Branch</label>
+      <select class="form-select" name="branch">
+        <option value="">All branches</option>
+        {% for branch in branches %}
+        <option value="{{ branch }}" {% if branch == selected_branch %}selected{% endif %}>{{ branch }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-4 col-xl-3">
+      <label class="form-label text-uppercase small">Category</label>
+      <select class="form-select" name="category">
+        <option value="">All categories</option>
+        {% for category in categories %}
+        <option value="{{ category }}" {% if category == selected_category %}selected{% endif %}>{{ category }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-4 col-xl-3 d-flex flex-wrap gap-2 justify-content-end">
+      <button class="btn btn-primary d-flex align-items-center gap-2" type="submit"><i class="bi bi-funnel"></i>Filter</button>
+      <a class="btn btn-link text-decoration-none" href="{{ url_for('feedback_analytics') }}">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="surface-card p-4">
+  <div class="row g-3 align-items-center">
+    <div class="col-md-4">
+      <div class="stat-kicker">Average Rating</div>
+      <div class="display-5 fw-semibold mb-0">{{ avg_rating }}</div>
+    </div>
+    <div class="col-md-4">
+      <div class="stat-kicker">Total Feedbacks</div>
+      <div class="h2 fw-semibold mb-0">{{ total_feedbacks }}</div>
+    </div>
+    <div class="col-md-4">
+      <div class="stat-kicker">Ratings by star</div>
+      <div class="d-flex flex-wrap gap-2 justify-content-md-end">
+        {% for star in [5,4,3,2,1] %}
+        <span class="badge bg-light text-dark border">{{ star }}★ {{ star_counts.get(star, 0) }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="surface-card p-0 overflow-hidden">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-4 border-bottom border-light-subtle">
+    <div class="badge-chip badge-open"><i class="bi bi-chat-square-text"></i>{{ entries|length }} Results</div>
+    {% if filters_applied %}
+    <div class="d-flex flex-wrap gap-2">
+      {% for label, value in filters_applied %}
+      <span class="badge bg-light text-dark border">{{ label }}: {{ value }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="table-responsive p-3">
+    <table class="table table-modern align-middle mb-0">
+      <thead>
+        <tr>
+          <th scope="col">Submitted</th>
+          <th scope="col">Ticket #</th>
+          <th scope="col">Title</th>
+          <th scope="col">Rating</th>
+          <th scope="col">Comments</th>
+          <th scope="col">Submitted By</th>
+          <th scope="col">Branch</th>
+          <th scope="col">Category</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+        <tr>
+          <td>{{ format_ts(entry.submitted_at) }}</td>
+          <td><a href="{{ url_for('ticket_detail', ticket_id=entry.ticket_id) }}">#{{ entry.ticket_id }}</a></td>
+          <td>{{ entry.title or '—' }}</td>
+          <td>{% if entry.rating %}{{ entry.rating }}/5{% else %}—{% endif %}</td>
+          <td>{{ entry.comments or '—' }}</td>
+          <td>{{ entry.submitted_by or '—' }}</td>
+          <td>{{ entry.branch or '—' }}</td>
+          <td>{{ entry.category or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center py-5">
+            <div class="fw-semibold mb-2">No feedback yet</div>
+            <p class="text-secondary mb-0">Complete tickets and request feedback to see insights here.</p>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
 FEEDBACK_HTML = """
 {% extends 'base.html' %}
 {% block workspace_content %}
@@ -2024,7 +2151,6 @@ HOME_HTML = """
         <a class="btn btn-outline-dark d-flex align-items-center gap-2" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer2"></i>Open dashboard</a>
       {% else %}
         <a class="btn btn-primary btn-lg d-flex align-items-center gap-2" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right"></i>Sign in with Microsoft</a>
-        <a class="btn btn-outline-dark d-flex align-items-center gap-2" href="{{ url_for('tickets') }}"><i class="bi bi-eye"></i>Preview workspace</a>
       {% endif %}
     </div>
   </div>
@@ -2056,71 +2182,96 @@ KB_HTML = """
 {% extends 'base.html' %}
 {% block workspace_content %}
 <section class="d-flex flex-column gap-4">
-  <div class="surface-card p-4 p-md-5">
-    <div class="d-flex flex-column flex-md-row gap-3 justify-content-between align-items-md-center">
-      <div>
-        <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-life-preserver"></i> Knowledge Base</span>
-        <h1 class="fw-semibold display-6 mt-3 mb-2">Instant Answers</h1>
-        <p class="text-secondary mb-0">Search proven resolutions from closed tickets before opening something new.</p>
-      </div>
-      <a class="btn btn-outline-dark" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i> Submit Ticket</a>
-    </div>
-    <form id="kb-search-form" class="mt-4" autocomplete="off">
-      <div class="input-group input-group-lg">
-        <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
-        <input class="form-control border-start-0" id="kb-query" name="query" placeholder="Ask a question…" aria-label="Ask a question…">
-        <button class="btn btn-primary" type="submit"><i class="bi bi-stars me-1"></i>Ask</button>
-      </div>
-    </form>
-    <p class="text-secondary small mt-2 mb-0">Try phrases like "update Sage password" or "printer offline".</p>
-  </div>
-
-  <div id="kb-answer-card" class="surface-card p-4 p-md-5 d-none">
-    <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
-      <h2 class="h5 fw-semibold mb-0">AI Answer</h2>
-      <span class="badge bg-light text-dark border">Preview</span>
-    </div>
-    <div id="kb-answer-text" class="text-secondary"></div>
-    <div id="kb-answer-sources" class="small text-muted mt-3"></div>
-    <div id="kb-answer-cta" class="alert alert-warning mt-4 d-none" role="alert">
-      Still need help? <a class="alert-link" href="{{ url_for('new_ticket') }}">Create a support ticket</a> so the team can jump in.
-    </div>
-  </div>
-
-  <div class="surface-card p-4 p-md-5">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
-      <h2 class="h5 fw-semibold mb-0">Latest Knowledge Articles</h2>
-      <span class="text-secondary small">Mark helpful solutions so they rise to the top.</span>
-    </div>
-    <div class="d-flex flex-column gap-3">
-      {% if articles %}
-        {% for article in articles %}
-        <article class="border rounded-4 p-3 p-md-4">
-          <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
-            <div>
-              <a class="h5 d-block mb-2" href="{{ url_for('kb_article', article_id=article.id) }}">{{ article.title }}</a>
-              <p class="text-secondary mb-2">{{ article.summary }}</p>
-              {% if article.tags %}
-              <div class="d-flex flex-wrap gap-2">
-                {% for tag in article.tags.split(',') if tag.strip() %}
-                <span class="badge bg-light text-dark border">{{ tag.strip() }}</span>
-                {% endfor %}
-              </div>
-              {% endif %}
-            </div>
-            <div class="text-secondary small text-md-end">
-              <div><i class="bi bi-hand-thumbs-up"></i> {{ article.helpful_up or 0 }} helpful</div>
-              <div><i class="bi bi-hand-thumbs-down"></i> {{ article.helpful_down or 0 }} not helpful</div>
-            </div>
+  <div class="row g-4">
+    <div class="col-lg-8 col-xl-9 d-flex flex-column gap-4">
+      <div class="surface-card p-4 p-md-5">
+        <div class="d-flex flex-column flex-md-row gap-3 justify-content-between align-items-md-center">
+          <div>
+            <span class="badge-chip badge-open text-uppercase small"><i class="bi bi-life-preserver"></i> Knowledge Base</span>
+            <h1 class="fw-semibold display-6 mt-3 mb-2">Instant Answers</h1>
+            <p class="text-secondary mb-0">Search proven resolutions from closed tickets before opening something new.</p>
           </div>
-        </article>
-        {% endfor %}
-      {% else %}
-      <div class="alert alert-info mb-0" role="alert">
-        No knowledge base content yet. Close a few tickets with solid write-ups to seed the library.
+          <a class="btn btn-outline-dark" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i> Submit Ticket</a>
+        </div>
+        <form id="kb-search-form" class="mt-4" autocomplete="off">
+          <div class="input-group input-group-lg">
+            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+            <input class="form-control border-start-0" id="kb-query" name="query" placeholder="Ask a question…" aria-label="Ask a question…">
+            <button class="btn btn-primary" type="submit"><i class="bi bi-stars me-1"></i>Ask</button>
+          </div>
+        </form>
+        <p class="text-secondary small mt-2 mb-0">Try phrases like "update Sage password" or "printer offline".</p>
       </div>
-      {% endif %}
+
+      <div id="kb-answer-card" class="surface-card p-4 p-md-5 d-none">
+        <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+          <h2 class="h5 fw-semibold mb-0">AI Answer</h2>
+          <span class="badge bg-light text-dark border">Preview</span>
+        </div>
+        <div id="kb-answer-text" class="text-secondary"></div>
+        <div id="kb-answer-sources" class="small text-muted mt-3"></div>
+        <div id="kb-answer-cta" class="alert alert-warning mt-4 d-none" role="alert">
+          Still need help? <a class="alert-link" href="{{ url_for('new_ticket') }}">Create a support ticket</a> so the team can jump in.
+        </div>
+      </div>
+
+      <div class="surface-card p-4 p-md-5">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+          <h2 class="h5 fw-semibold mb-0">Latest Knowledge Articles</h2>
+          <span class="text-secondary small">Mark helpful solutions so they rise to the top.</span>
+        </div>
+        <div class="d-flex flex-column gap-3">
+          {% if articles %}
+            {% for article in articles %}
+            <article class="border rounded-4 p-3 p-md-4">
+              <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+                <div>
+                  <a class="h5 d-block mb-2" href="{{ url_for('kb_article', article_id=article.id) }}">{{ article.title }}</a>
+                  <p class="text-secondary mb-2">{{ article.summary }}</p>
+                  {% if article.tags %}
+                  <div class="d-flex flex-wrap gap-2">
+                    {% for tag in article.tags.split(',') if tag.strip() %}
+                    <span class="badge bg-light text-dark border">{{ tag.strip() }}</span>
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                </div>
+                <div class="text-secondary small text-md-end">
+                  <div><i class="bi bi-hand-thumbs-up"></i> {{ article.helpful_up or 0 }} helpful</div>
+                  <div><i class="bi bi-hand-thumbs-down"></i> {{ article.helpful_down or 0 }} not helpful</div>
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          {% else %}
+          <div class="alert alert-info mb-0" role="alert">
+            No knowledge base content yet. Close a few tickets with solid write-ups to seed the library.
+          </div>
+          {% endif %}
+        </div>
+      </div>
     </div>
+    {% if recent_queries %}
+    <div class="col-lg-4 col-xl-3">
+      <div class="surface-card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0">Recent Questions (admin)</h5>
+          <span class="badge bg-light text-dark border">{{ recent_queries|length }}</span>
+        </div>
+        <div class="d-flex flex-column gap-3">
+          {% for item in recent_queries %}
+          <div class="border rounded-4 p-3">
+            <div class="fw-semibold small mb-1">{{ item.query }}</div>
+            <div class="text-secondary small">{{ format_ts(item.created_at) }}</div>
+            {% if item.user_email %}
+            <div class="text-secondary small">{{ item.user_email }}</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </section>
 
@@ -2212,7 +2363,7 @@ KB_ARTICLE_HTML = """
       <h1 class="h3 fw-semibold mt-3 mb-2">{{ article.title }}</h1>
       <p class="text-secondary mb-0">{{ article.summary }}</p>
     </div>
-    <a class="btn btn-outline-dark" href="{{ url_for('kb') }}"><i class="bi bi-arrow-left"></i> Back to Knowledge Base</a>
+    <a class="btn btn-outline-dark" href="{{ url_for('kb_page') }}"><i class="bi bi-arrow-left"></i> Back to Knowledge Base</a>
   </div>
 
   {% if article.tags %}
@@ -2254,10 +2405,11 @@ def home():
 
 @app.route("/kb")
 @login_required
-def kb():
+def kb_page():
     with app.app_context():
         init_db()
     db = get_db()
+    admin = is_admin_user()
     rows = db.execute(
         """
         SELECT id, title, summary, body, tags, helpful_up, helpful_down
@@ -2266,10 +2418,23 @@ def kb():
         """
     ).fetchall()
     articles = [dict(row) for row in rows]
+    recent_queries: list[sqlite3.Row] = []
+    if admin:
+        recent_rows = db.execute(
+            """
+            SELECT query, user_email, CAST(created_at AS TEXT) AS created_at
+            FROM kb_queries
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        recent_queries = [dict(row) for row in recent_rows]
     return render_template_string(
         KB_HTML,
         articles=articles,
         fallback_answer=_kb_unavailable_message(),
+        recent_queries=recent_queries,
+        format_ts=format_timestamp,
     )
 
 
@@ -2281,9 +2446,22 @@ def kb_ask():
     if not query:
         return jsonify({"error": "Query is required."}), 400
 
+    if not is_it_question(query):
+        return jsonify(
+            {
+                "answer": "This assistant answers IT questions only. Please rephrase with an IT topic or create a ticket.",
+                "results": [],
+            }
+        )
+
     with app.app_context():
         init_db()
     db = get_db()
+    db.execute(
+        "INSERT INTO kb_queries (user_email, query, created_at) VALUES (?, ?, ?)",
+        (current_user_email(), query, now_ts()),
+    )
+    db.commit()
     rows = db.execute(
         """
         SELECT a.id, a.title, a.summary, a.body, a.tags, a.helpful_up, a.helpful_down, e.embedding_json
@@ -2352,6 +2530,150 @@ def kb_ask():
     return jsonify({"answer": answer, "results": results_payload})
 
 
+@app.route("/feedbacks")
+@login_required
+def feedback_analytics():
+    with app.app_context():
+        init_db()
+    db = get_db()
+    admin = is_admin_user()
+
+    base_conditions: list[str] = []
+    base_params: list[str] = []
+
+    if not admin:
+        email = current_user_email()
+        if email:
+            base_conditions.append("LOWER(t.requester_email) = ?")
+            base_params.append(email)
+        else:
+            star_counts_empty = {star: 0 for star in range(1, 6)}
+            return render_template_string(
+                FEEDBACK_ANALYTICS_HTML,
+                entries=[],
+                avg_rating="—",
+                total_feedbacks=0,
+                star_counts=star_counts_empty,
+                requester_options=[],
+                branches=BRANCHES,
+                categories=CATEGORIES,
+                selected_requester="",
+                selected_branch="",
+                selected_category="",
+                filters_applied=[],
+                format_ts=format_timestamp,
+            )
+
+    requester_conditions = [
+        "t.requester_email IS NOT NULL",
+        "TRIM(t.requester_email) != ''",
+        *base_conditions,
+    ]
+    requester_sql = "SELECT DISTINCT t.requester_email FROM tickets t"
+    if requester_conditions:
+        requester_sql += " WHERE " + " AND ".join(requester_conditions)
+    requester_sql += " ORDER BY LOWER(t.requester_email)"
+    requester_rows = db.execute(requester_sql, base_params).fetchall()
+    requester_options = [row[0] for row in requester_rows if row[0]]
+
+    requester_filter = (request.args.get("requester_email") or "").strip()
+    branch_filter = (request.args.get("branch") or "").strip()
+    category_filter = (request.args.get("category") or "").strip()
+
+    selected_requester = ""
+    if requester_filter:
+        lower_lookup = requester_filter.lower()
+        for option in requester_options:
+            if option and option.lower() == lower_lookup:
+                selected_requester = option
+                break
+
+    selected_branch = branch_filter if branch_filter in BRANCHES else ""
+    selected_category = category_filter if category_filter in CATEGORIES else ""
+
+    conditions = list(base_conditions)
+    params = list(base_params)
+    filters_applied: list[tuple[str, str]] = []
+
+    if selected_requester:
+        conditions.append("LOWER(t.requester_email) = LOWER(?)")
+        params.append(selected_requester)
+        filters_applied.append(("Requester", selected_requester))
+
+    if selected_branch:
+        conditions.append("t.branch = ?")
+        params.append(selected_branch)
+        filters_applied.append(("Branch", selected_branch))
+
+    if selected_category:
+        conditions.append("t.category = ?")
+        params.append(selected_category)
+        filters_applied.append(("Category", selected_category))
+
+    where_clause = ""
+    if conditions:
+        where_clause = " WHERE " + " AND ".join(conditions)
+
+    stats_row = db.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total_feedbacks,
+            AVG(tf.rating) AS avg_rating,
+            SUM(CASE WHEN tf.rating = 5 THEN 1 ELSE 0 END) AS star_5,
+            SUM(CASE WHEN tf.rating = 4 THEN 1 ELSE 0 END) AS star_4,
+            SUM(CASE WHEN tf.rating = 3 THEN 1 ELSE 0 END) AS star_3,
+            SUM(CASE WHEN tf.rating = 2 THEN 1 ELSE 0 END) AS star_2,
+            SUM(CASE WHEN tf.rating = 1 THEN 1 ELSE 0 END) AS star_1
+        FROM ticket_feedback tf
+        JOIN tickets t ON t.id = tf.ticket_id
+        {where_clause}
+        """,
+        params,
+    ).fetchone()
+
+    total_feedbacks = int(stats_row["total_feedbacks"] or 0) if stats_row else 0
+    avg_value = stats_row["avg_rating"] if stats_row else None
+    avg_rating = f"{avg_value:.1f}" if avg_value is not None else "0.0"
+    star_counts = {
+        5: int(stats_row["star_5"] or 0) if stats_row else 0,
+        4: int(stats_row["star_4"] or 0) if stats_row else 0,
+        3: int(stats_row["star_3"] or 0) if stats_row else 0,
+        2: int(stats_row["star_2"] or 0) if stats_row else 0,
+        1: int(stats_row["star_1"] or 0) if stats_row else 0,
+    }
+
+    entries_rows = db.execute(
+        f"""
+        SELECT tf.ticket_id, tf.rating, tf.comments, tf.submitted_by,
+               CAST(tf.submitted_at AS TEXT) AS submitted_at,
+               t.title, t.branch, t.category
+        FROM ticket_feedback tf
+        JOIN tickets t ON t.id = tf.ticket_id
+        {where_clause}
+        ORDER BY datetime(tf.submitted_at) DESC, tf.id DESC
+        LIMIT 20
+        """,
+        params,
+    ).fetchall()
+    entries = [dict(row) for row in entries_rows]
+
+    return render_template_string(
+        FEEDBACK_ANALYTICS_HTML,
+        entries=entries,
+        avg_rating=avg_rating,
+        total_feedbacks=total_feedbacks,
+        star_counts=star_counts,
+        requester_options=requester_options,
+        branches=BRANCHES,
+        categories=CATEGORIES,
+        selected_requester=selected_requester,
+        selected_branch=selected_branch,
+        selected_category=selected_category,
+        filters_applied=filters_applied,
+        format_ts=format_timestamp,
+    )
+
+
 @app.route("/kb/article/<int:article_id>")
 @login_required
 def kb_article(article_id: int):
@@ -2368,7 +2690,7 @@ def kb_article(article_id: int):
     ).fetchone()
     if not row:
         flash("Knowledge base article not found.")
-        return redirect(url_for("kb"))
+        return redirect(url_for("kb_page"))
     return render_template_string(
         KB_ARTICLE_HTML,
         article=dict(row),
@@ -2393,7 +2715,7 @@ def kb_article_vote(article_id: int):
     )
     if result.rowcount == 0:
         flash("Knowledge base article not found.")
-        return redirect(url_for("kb"))
+        return redirect(url_for("kb_page"))
     db.commit()
     flash("Thanks for letting us know!")
     return redirect(url_for("kb_article", article_id=article_id))
@@ -2414,11 +2736,43 @@ def tickets():
     )
 
     params: list[str] = []
+    conditions: list[str] = []
+    filters_applied: list[tuple[str, str]] = []
+
+    status_filter = (request.args.get("status") or "").strip()
+    priority_filter = (request.args.get("priority") or "").strip()
+    branch_filter = (request.args.get("branch") or "").strip()
+    category_filter = (request.args.get("category") or "").strip()
+
+    selected_status = status_filter if status_filter in STATUSES else ""
+    if selected_status:
+        conditions.append("status = ?")
+        params.append(selected_status)
+        filters_applied.append(("Status", selected_status))
+
+    selected_priority = priority_filter if priority_filter in PRIORITIES else ""
+    if selected_priority:
+        conditions.append("priority = ?")
+        params.append(selected_priority)
+        filters_applied.append(("Priority", selected_priority))
+
+    selected_branch = branch_filter if branch_filter in BRANCHES else ""
+    if selected_branch:
+        conditions.append("branch = ?")
+        params.append(selected_branch)
+        filters_applied.append(("Branch", selected_branch))
+
+    selected_category = category_filter if category_filter in CATEGORIES else ""
+    if selected_category:
+        conditions.append("category = ?")
+        params.append(selected_category)
+        filters_applied.append(("Category", selected_category))
+
     if not admin:
         email = current_user_email()
         if email:
-            sql += " WHERE LOWER(requester_email) = ?"
-            params.append(email)
+            conditions.insert(0, "LOWER(requester_email) = ?")
+            params.insert(0, email)
         else:
             tickets = []
             stats = {"total": 0, "open": 0, "completed": 0}
@@ -2435,9 +2789,16 @@ def tickets():
                 branches=BRANCHES,
                 status_badges=STATUS_BADGES,
                 priority_badges=PRIORITY_BADGES,
-                feedback_entries=[],
-                kb_top_articles=[],
+                selected_status="",
+                selected_priority="",
+                selected_branch="",
+                selected_category="",
+                categories=CATEGORIES,
+                filters_applied=[],
             )
+
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
 
     sql += " ORDER BY datetime(created_at) DESC, id DESC"
     rows = db.execute(sql, params).fetchall()
@@ -2459,32 +2820,6 @@ def tickets():
 
     stats = {"total": total, "open": open_count, "completed": completed}
 
-    feedback_entries: list[dict[str, object]] = []
-    kb_top_articles: list[dict[str, object]] = []
-    if admin:
-        feedback_rows = db.execute(
-            """
-            SELECT tf.ticket_id, tf.rating, tf.comments, tf.submitted_by,
-                   CAST(tf.submitted_at AS TEXT) AS submitted_at,
-                   t.title AS ticket_title
-            FROM ticket_feedback tf
-            JOIN tickets t ON t.id = tf.ticket_id
-            ORDER BY datetime(tf.submitted_at) DESC, tf.id DESC
-            LIMIT 10
-            """,
-        ).fetchall()
-        feedback_entries = [dict(row) for row in feedback_rows]
-
-        kb_rows = db.execute(
-            """
-            SELECT id, title, helpful_up, CAST(created_at AS TEXT) AS created_at
-            FROM kb_articles
-            ORDER BY helpful_up DESC, datetime(created_at) DESC, id DESC
-            LIMIT 5
-            """
-        ).fetchall()
-        kb_top_articles = [dict(row) for row in kb_rows]
-
     return render_template_string(
         DASHBOARD_HTML,
         tickets=tickets,
@@ -2497,8 +2832,12 @@ def tickets():
         branches=BRANCHES,
         status_badges=STATUS_BADGES,
         priority_badges=PRIORITY_BADGES,
-        feedback_entries=feedback_entries,
-        kb_top_articles=kb_top_articles,
+        selected_status=selected_status,
+        selected_priority=selected_priority,
+        selected_branch=selected_branch,
+        selected_category=selected_category,
+        categories=CATEGORIES,
+        filters_applied=filters_applied,
     )
 
 
@@ -2593,6 +2932,7 @@ def new_ticket():
         <strong>Branch:</strong> {data['branch']}<br>
         <strong>Category:</strong> {data['category']}</p>
         <p><strong>Issue Description:</strong><br>{description_html}</p>
+        <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
         """
         admin_recipients = sorted(ADMIN_EMAILS) or ["brad@seegarsfence.com"]
         send_email(admin_recipients, subject_admin, body_admin)
@@ -2611,6 +2951,7 @@ def new_ticket():
             <p><strong>Issue Description:</strong><br>{description_html}</p>
             <p><a href="{ticket_link}">View your ticket</a> any time to share additional details or check progress.</p>
             <p><em>We appreciate your patience — our goal is to keep your tech running smoothly!</em></p>
+            <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
             """
             send_email(data["requester_email"], subject_user, body_user)
 
@@ -2758,7 +3099,7 @@ def add_comment(ticket_id: int):
               <p style=\"margin:0;\">{comment_html}</p>
             </div>
             <p><a href="{ticket_link}">Open your ticket</a> to review the update or add more details.</p>
-            <p>Thank you,<br>Seegars IT</p>
+            <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
             """
             send_ticket_notification(ticket_row, subject, body_html)
     flash("Comment added.")
@@ -2815,7 +3156,7 @@ def update_status(ticket_id: int):
             <p>Your ticket <strong>{escape(ticket_title)}</strong> has been marked <strong>{escape(status)}</strong>.</p>
             <p>You can review the final details on the <a href="{ticket_link}">ticket page</a>.</p>
             <p>We value your perspective. Please take a moment to <a href="{feedback_url}">share feedback on this experience</a>.</p>
-            <p>Thank you,<br>Seegars IT</p>
+            <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
             """
         else:
             subject = f"Ticket status update: {ticket_title}"
@@ -2823,7 +3164,7 @@ def update_status(ticket_id: int):
             <p>Hi {escape(requester_name)},</p>
             <p>Your ticket <strong>{escape(ticket_title)}</strong> is now marked <strong>{escape(status)}</strong>.</p>
             <p><a href="{ticket_link}">Open your ticket</a> to review progress or add more information.</p>
-            <p>Thank you,<br>Seegars IT</p>
+            <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
             """
         send_ticket_notification(ticket_row, subject, body_html)
     flash("Status updated.")
@@ -2866,7 +3207,7 @@ def update_assignee(ticket_id: int):
         <p>Hi {escape(requester_name)},</p>
         <p>Your ticket <strong>{escape(ticket_title)}</strong> has been assigned to <strong>{escape(assignee_label)}</strong>.</p>
         <p><a href="{ticket_link}">Open your ticket</a> if you have more information to share.</p>
-        <p>Thank you,<br>Seegars IT</p>
+        <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
         """
         send_ticket_notification(ticket_row, subject, body_html)
     flash("Assignee updated.")
@@ -3047,7 +3388,7 @@ def auth_callback():
 def logout():
     session.clear()
     flash("Signed out.")
-    return redirect(url_for("tickets"))
+    return redirect(url_for("home"))
 
 # --------------------------------------------------------------------------------------
 # Jinja loader (since we keep templates inline in this single file)
@@ -3058,6 +3399,7 @@ app.jinja_loader = DictLoader({
     "kb.html": KB_HTML,
     "kb_article.html": KB_ARTICLE_HTML,
     "dashboard.html": DASHBOARD_HTML,
+    "feedback_analytics.html": FEEDBACK_ANALYTICS_HTML,
     "new.html": NEW_HTML,
     "detail.html": DETAIL_HTML,
     "feedback.html": FEEDBACK_HTML,
