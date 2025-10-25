@@ -2,6 +2,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import app as seegars_app  # noqa: E402
@@ -21,15 +22,16 @@ def seed_ticket(db, **overrides):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,
+        "feedback_token": uuid.uuid4().hex,
     }
     defaults.update(overrides)
     db.execute(
         """
         INSERT INTO tickets (
             title, description, requester_name, requester_email, branch, priority,
-            category, assignee, status, created_at, updated_at, completed_at
+            category, assignee, status, created_at, updated_at, completed_at, feedback_token
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             defaults["title"],
@@ -44,6 +46,7 @@ def seed_ticket(db, **overrides):
             defaults["created_at"],
             defaults["updated_at"],
             defaults["completed_at"],
+            defaults["feedback_token"],
         ),
     )
 
