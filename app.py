@@ -35,6 +35,8 @@ from jinja2 import DictLoader
 from markupsafe import escape
 from msal import ConfidentialClientApplication
 from werkzeug.utils import secure_filename
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 _app_token_cache: dict[str, float | str] = {"token": "", "expires": 0.0}
@@ -354,6 +356,21 @@ def _resolve_db_path(
 
 DB_PATH = _resolve_db_path()
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    app.logger.info("SQLAlchemy engine configured using DATABASE_URL")
+else:
+    engine = create_engine(
+        f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}
+    )
+    app.logger.info("SQLAlchemy engine configured for SQLite at %s", DB_PATH)
+
+SessionLocal = scoped_session(
+    sessionmaker(bind=engine, autoflush=False, autocommit=False)
+)
+Base = declarative_base()
+
 # Microsoft Entra (Azure AD / M365) app details come from environment variables on Render
 CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
 TENANT_ID = os.getenv("MICROSOFT_TENANT_ID")
@@ -378,6 +395,20 @@ KB_CONTEXT_BODY_LIMIT = 700
 # --------------------------------------------------------------------------------------
 # DB helpers
 # --------------------------------------------------------------------------------------
+
+
+def get_session():
+    return SessionLocal()
+
+
+def close_session(exc: BaseException | None = None):  # noqa: ARG001
+    SessionLocal.remove()
+
+
+@app.teardown_appcontext
+def _teardown_sqlalchemy(exc: BaseException | None):  # noqa: ARG001
+    close_session(exc)
+
 
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
