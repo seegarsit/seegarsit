@@ -45,8 +45,9 @@ from sqlalchemy import (
     Text,
     create_engine,
     func,
+    select,
 )
-from sqlalchemy.orm import declarative_base, relationship, scoped_session, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, relationship, scoped_session, sessionmaker
 
 GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 _app_token_cache: dict[str, float | str] = {"token": "", "expires": 0.0}
@@ -3040,51 +3041,43 @@ def new_ticket():
                 }
             )
 
+        session: Session = get_session()
         ts = now_ts()
-        feedback_token = generate_feedback_token()
-        db = get_db()
-        cur = db.execute(
-            """
-            INSERT INTO tickets (
-                title, description, requester_name, requester_email, branch, priority,
-                category, assignee, status, created_at, updated_at, completed_at, feedback_token
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, NULL, ?)
-            """,
-            (
-                data["title"],
-                data["description"],
-                data["requester_name"],
-                data["requester_email"],
-                data["branch"],
-                data["priority"],
-                data["category"],
-                ASSIGNEE_DEFAULT,
-                ts,
-                ts,
-                feedback_token,
-            )
+        ticket = Ticket(
+            title=data["title"],
+            description=data["description"],
+            requester_name=data["requester_name"],
+            requester_email=data["requester_email"],
+            branch=data["branch"],
+            priority=data["priority"] or "Medium",
+            category=data["category"],
+            assignee=ASSIGNEE_DEFAULT,
+            status="Open",
+            created_at=ts,
+            updated_at=ts,
+            completed_at=None,
+            feedback_token=generate_feedback_token(),
         )
-        ticket_id = cur.lastrowid
+        session.add(ticket)
+        session.flush()
+        ticket_id = ticket.id
+
         if attachments_to_save:
             uploaded_ts = now_ts()
             for item in attachments_to_save:
-                db.execute(
-                    """
-                    INSERT INTO attachments (ticket_id, filename, content_type, data, uploaded_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        ticket_id,
-                        item["filename"],
-                        item["content_type"],
-                        item["data"],
-                        uploaded_ts,
-                    ),
+                session.add(
+                    Attachment(
+                        ticket_id=ticket_id,
+                        filename=item["filename"],
+                        content_type=item["content_type"],
+                        data=item["data"],
+                        uploaded_at=uploaded_ts,
+                    )
                 )
-        db.commit()
 
-                # --- Email notifications (uses session['access_token']) ---
+        session.commit()
+
+        # --- Email notifications (uses session['access_token']) ---
         subject_admin = f"A new ticket has been submitted by {data['requester_name'] or 'Unknown User'}"
         description_html = data["description"].replace("\n", "<br>")
         body_admin = f"""
