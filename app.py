@@ -35,8 +35,17 @@ from jinja2 import DictLoader
 from markupsafe import escape
 from msal import ConfidentialClientApplication
 from werkzeug.utils import secure_filename
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, relationship, scoped_session, sessionmaker
 
 GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 _app_token_cache: dict[str, float | str] = {"token": "", "expires": 0.0}
@@ -371,6 +380,82 @@ SessionLocal = scoped_session(
 )
 Base = declarative_base()
 
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    requester_name = Column(String)
+    requester_email = Column(String)
+    branch = Column(String)
+    priority = Column(String)
+    category = Column(String)
+    assignee = Column(String)
+    status = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
+    feedback_token = Column(String)
+
+    comments = relationship(
+        "Comment",
+        back_populates="ticket",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
+    attachments = relationship(
+        "Attachment",
+        back_populates="ticket",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
+    feedback_entries = relationship(
+        "TicketFeedback",
+        back_populates="ticket",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    author = Column(String)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+    ticket = relationship("Ticket", back_populates="comments", lazy="select")
+
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    filename = Column(String, nullable=False)
+    content_type = Column(String)
+    data = Column(LargeBinary, nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False)
+
+    ticket = relationship("Ticket", back_populates="attachments", lazy="select")
+
+
+class TicketFeedback(Base):
+    __tablename__ = "ticket_feedback"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    rating = Column(Integer)
+    comments = Column(Text)
+    submitted_by = Column(String)
+    submitted_at = Column(DateTime(timezone=True), nullable=False)
+
+    ticket = relationship("Ticket", back_populates="feedback_entries", lazy="select")
+
 # Microsoft Entra (Azure AD / M365) app details come from environment variables on Render
 CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
 TENANT_ID = os.getenv("MICROSOFT_TENANT_ID")
@@ -542,6 +627,11 @@ def init_db():
                 (generate_feedback_token(), row["id"]),
             )
         db.commit()
+
+    try:
+        Base.metadata.create_all(engine)
+    except Exception as e:  # pragma: no cover - safeguard for startup
+        app.logger.warning("SQLAlchemy create_all failed: %s", e)
 
 # --------------------------------------------------------------------------------------
 # Auth helpers
