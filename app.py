@@ -43,6 +43,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    case,
     create_engine,
     desc,
     func,
@@ -1324,7 +1325,9 @@ BASE_HTML = """
         <a class="nav-pill {% if request.endpoint == 'tickets' %}active{% endif %}" href="{{ url_for('tickets') }}"><i class="bi bi-speedometer"></i>Dashboard</a>
         <a class="nav-pill {% if request.endpoint == 'new_ticket' %}active{% endif %}" href="{{ url_for('new_ticket') }}"><i class="bi bi-plus-circle"></i>New Ticket</a>
         <a class="nav-pill {% if request.endpoint in ('kb_page', 'kb_article') %}active{% endif %}" href="{{ url_for('kb_page') }}"><i class="bi bi-life-preserver"></i>Knowledge Base</a>
+        {% if admin %}
         <a class="nav-pill {% if request.endpoint == 'feedback_analytics' %}active{% endif %}" href="{{ url_for('feedback_analytics') }}"><i class="bi bi-chat-dots"></i>Feedback</a>
+        {% endif %}
       </div>
     </aside>
     <main class="app-content">
@@ -2093,33 +2096,47 @@ FEEDBACK_ANALYTICS_HTML = """
   </div>
 </section>
 
-<div class="surface-card p-4">
+<div class="surface-card p-4 mb-4">
   <form class="row g-3 align-items-end" method="get">
+    {% if show_requester_filter %}
     <div class="col-12 col-md-4 col-xl-3">
       <label class="form-label text-uppercase small">Requester</label>
-      <select class="form-select" name="requester_email">
+      <select class="form-select" name="requester_email" {% if not requester_options %}disabled{% endif %}>
+        {% if requester_options %}
         <option value="">All requesters</option>
         {% for requester in requester_options %}
         <option value="{{ requester }}" {% if requester == selected_requester %}selected{% endif %}>{{ requester }}</option>
         {% endfor %}
+        {% else %}
+        <option value="">No requesters found</option>
+        {% endif %}
       </select>
     </div>
+    {% endif %}
     <div class="col-12 col-md-4 col-xl-3">
       <label class="form-label text-uppercase small">Branch</label>
-      <select class="form-select" name="branch">
+      <select class="form-select" name="branch" {% if not branch_options %}disabled{% endif %}>
+        {% if branch_options %}
         <option value="">All branches</option>
-        {% for branch in branches %}
+        {% for branch in branch_options %}
         <option value="{{ branch }}" {% if branch == selected_branch %}selected{% endif %}>{{ branch }}</option>
         {% endfor %}
+        {% else %}
+        <option value="">No branches available</option>
+        {% endif %}
       </select>
     </div>
     <div class="col-12 col-md-4 col-xl-3">
       <label class="form-label text-uppercase small">Category</label>
-      <select class="form-select" name="category">
+      <select class="form-select" name="category" {% if not category_options %}disabled{% endif %}>
+        {% if category_options %}
         <option value="">All categories</option>
-        {% for category in categories %}
+        {% for category in category_options %}
         <option value="{{ category }}" {% if category == selected_category %}selected{% endif %}>{{ category }}</option>
         {% endfor %}
+        {% else %}
+        <option value="">No categories available</option>
+        {% endif %}
       </select>
     </div>
     <div class="col-12 col-md-4 col-xl-3 d-flex flex-wrap gap-2 justify-content-end">
@@ -2129,22 +2146,42 @@ FEEDBACK_ANALYTICS_HTML = """
   </form>
 </div>
 
-<div class="surface-card p-4">
-  <div class="row g-3 align-items-center">
-    <div class="col-md-4">
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="surface-card p-4 h-100">
+      <div class="stat-kicker">Total Feedback</div>
+      <div class="display-6 fw-semibold mb-1">{{ total_feedbacks }}</div>
+      <p class="text-secondary small mb-0">Comments and ratings submitted.</p>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="surface-card p-4 h-100">
       <div class="stat-kicker">Average Rating</div>
-      <div class="display-5 fw-semibold mb-0">{{ avg_rating }}</div>
+      <div class="display-6 fw-semibold mb-1">{{ avg_rating }}</div>
+      <p class="text-secondary small mb-0">{% if rated_count %}Based on {{ rated_count }} rating{% if rated_count != 1 %}s{% endif %}.{% else %}No ratings yet.{% endif %}</p>
     </div>
-    <div class="col-md-4">
-      <div class="stat-kicker">Total Feedbacks</div>
-      <div class="h2 fw-semibold mb-0">{{ total_feedbacks }}</div>
-    </div>
-    <div class="col-md-4">
-      <div class="stat-kicker">Ratings by star</div>
-      <div class="d-flex flex-wrap gap-2 justify-content-md-end">
-        {% for star in [5,4,3,2,1] %}
-        <span class="badge bg-light text-dark border">{{ star }}★ {{ star_counts.get(star, 0) }}</span>
-        {% endfor %}
+  </div>
+  <div class="col-md-4">
+    <div class="surface-card p-4 h-100">
+      <div class="stat-kicker">Star Distribution</div>
+      <div class="d-flex flex-column gap-2">
+        {% if rated_count %}
+          {% for star in [5,4,3,2,1] %}
+            {% set count = star_counts.get(star, 0) %}
+            {% if count %}
+            {% set width = (count / max_star_count * 100) if max_star_count else 0 %}
+            <div class="d-flex align-items-center gap-2">
+              <div class="fw-semibold small" style="width: 2.5rem;">{{ star }}&#9733;</div>
+              <div class="progress flex-grow-1" style="height: 8px;">
+                <div class="progress-bar bg-success" role="progressbar" style="width: {{ (width)|round(0, 'floor') }}%;" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+              <div class="text-secondary small">{{ count }}</div>
+            </div>
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          <p class="text-secondary small mb-0">No star ratings yet.</p>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -2152,7 +2189,7 @@ FEEDBACK_ANALYTICS_HTML = """
 
 <div class="surface-card p-0 overflow-hidden">
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-4 border-bottom border-light-subtle">
-    <div class="badge-chip badge-open"><i class="bi bi-chat-square-text"></i>{{ entries|length }} Results</div>
+    <div class="badge-chip badge-open"><i class="bi bi-chat-square-text"></i>{{ results_count }} Results</div>
     {% if filters_applied %}
     <div class="d-flex flex-wrap gap-2">
       {% for label, value in filters_applied %}
@@ -2166,30 +2203,31 @@ FEEDBACK_ANALYTICS_HTML = """
       <thead>
         <tr>
           <th scope="col">Submitted</th>
-          <th scope="col">Ticket #</th>
-          <th scope="col">Title</th>
+          <th scope="col">Ticket</th>
           <th scope="col">Rating</th>
           <th scope="col">Comments</th>
-          <th scope="col">Submitted By</th>
           <th scope="col">Branch</th>
           <th scope="col">Category</th>
+          <th scope="col">Submitted By</th>
         </tr>
       </thead>
       <tbody>
         {% for entry in entries %}
         <tr>
-          <td>{{ format_ts(entry.submitted_at) }}</td>
-          <td><a href="{{ url_for('ticket_detail', ticket_id=entry.ticket_id) }}">#{{ entry.ticket_id }}</a></td>
-          <td>{{ entry.title or '—' }}</td>
-          <td>{% if entry.rating %}{{ entry.rating }}/5{% else %}—{% endif %}</td>
-          <td>{{ entry.comments or '—' }}</td>
-          <td>{{ entry.submitted_by or '—' }}</td>
-          <td>{{ entry.branch or '—' }}</td>
-          <td>{{ entry.category or '—' }}</td>
+          <td class="small text-nowrap">{{ format_ts(entry.submitted_at) }}</td>
+          <td>
+            <a href="{{ url_for('ticket_detail', ticket_id=entry.ticket_id) }}">#{{ entry.ticket_id }}</a>
+            <div class="text-secondary small">{{ entry.ticket.title if entry.ticket else '&mdash;' }}</div>
+          </td>
+          <td>{% if entry.rating is not none %}{{ entry.rating }}/5{% else %}&mdash;{% endif %}</td>
+          <td class="small">{{ entry.comments|default('&mdash;', true)|truncate(160) }}</td>
+          <td>{{ entry.ticket.branch if entry.ticket else '&mdash;' }}</td>
+          <td>{{ entry.ticket.category if entry.ticket else '&mdash;' }}</td>
+          <td>{{ entry.submitted_by or '&mdash;' }}</td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="8" class="text-center py-5">
+          <td colspan="7" class="text-center py-5">
             <div class="fw-semibold mb-2">No feedback yet</div>
             <p class="text-secondary mb-0">Complete tickets and request feedback to see insights here.</p>
           </td>
@@ -2199,7 +2237,7 @@ FEEDBACK_ANALYTICS_HTML = """
     </table>
   </div>
 </div>
-{% endblock %}
+  {% endblock %}
 """
 
 
@@ -2672,145 +2710,158 @@ def kb_ask():
 @app.route("/feedbacks")
 @login_required
 def feedback_analytics():
-    with app.app_context():
-        init_db()
-    db = get_db()
+    if not is_admin_user() and not session.get("user"):
+        return redirect(url_for("login"))
+
     admin = is_admin_user()
+    db_session = SessionLocal()
+    try:
+        user_email = current_user_email()
+        access_filters: list = []
+        if not admin:
+            if not user_email:
+                empty_counts = {star: 0 for star in range(1, 6)}
+                return render_template_string(
+                    FEEDBACK_ANALYTICS_HTML,
+                    entries=[],
+                    avg_rating="—",
+                    total_feedbacks=0,
+                    star_counts=empty_counts,
+                    rated_count=0,
+                    max_star_count=0,
+                    requester_options=[],
+                    branch_options=[],
+                    category_options=[],
+                    selected_requester="",
+                    selected_branch="",
+                    selected_category="",
+                    filters_applied=[],
+                    show_requester_filter=False,
+                    results_count=0,
+                    format_ts=format_timestamp,
+                    admin=admin,
+                )
+            access_filters.append(func.lower(Ticket.requester_email) == user_email)
 
-    base_conditions: list[str] = []
-    base_params: list[str] = []
-
-    if not admin:
-        email = current_user_email()
-        if email:
-            base_conditions.append("LOWER(t.requester_email) = ?")
-            base_params.append(email)
-        else:
-            star_counts_empty = {star: 0 for star in range(1, 6)}
-            return render_template_string(
-                FEEDBACK_ANALYTICS_HTML,
-                entries=[],
-                avg_rating="—",
-                total_feedbacks=0,
-                star_counts=star_counts_empty,
-                requester_options=[],
-                branches=BRANCHES,
-                categories=CATEGORIES,
-                selected_requester="",
-                selected_branch="",
-                selected_category="",
-                filters_applied=[],
-                format_ts=format_timestamp,
+        requester_options: list[str] = []
+        if admin:
+            requester_rows = (
+                db_session.query(Ticket.requester_email)
+                .join(TicketFeedback)
+                .filter(Ticket.requester_email.isnot(None))
+                .filter(func.trim(Ticket.requester_email) != "")
+                .distinct()
+                .order_by(func.lower(Ticket.requester_email))
+                .all()
             )
+            requester_options = [row[0] for row in requester_rows]
 
-    requester_conditions = [
-        "t.requester_email IS NOT NULL",
-        "TRIM(t.requester_email) != ''",
-        *base_conditions,
-    ]
-    requester_sql = "SELECT DISTINCT t.requester_email FROM tickets t"
-    if requester_conditions:
-        requester_sql += " WHERE " + " AND ".join(requester_conditions)
-    requester_sql += " ORDER BY LOWER(t.requester_email)"
-    requester_rows = db.execute(requester_sql, base_params).fetchall()
-    requester_options = [row[0] for row in requester_rows if row[0]]
+        branch_rows = (
+            db_session.query(Ticket.branch)
+            .join(TicketFeedback)
+            .filter(*access_filters)
+            .filter(Ticket.branch.isnot(None))
+            .filter(func.trim(Ticket.branch) != "")
+            .distinct()
+            .order_by(func.lower(Ticket.branch))
+            .all()
+        )
+        branch_options = [row[0] for row in branch_rows]
 
-    requester_filter = (request.args.get("requester_email") or "").strip()
-    branch_filter = (request.args.get("branch") or "").strip()
-    category_filter = (request.args.get("category") or "").strip()
+        category_rows = (
+            db_session.query(Ticket.category)
+            .join(TicketFeedback)
+            .filter(*access_filters)
+            .filter(Ticket.category.isnot(None))
+            .filter(func.trim(Ticket.category) != "")
+            .distinct()
+            .order_by(func.lower(Ticket.category))
+            .all()
+        )
+        category_options = [row[0] for row in category_rows]
 
-    selected_requester = ""
-    if requester_filter:
-        lower_lookup = requester_filter.lower()
-        for option in requester_options:
-            if option and option.lower() == lower_lookup:
-                selected_requester = option
-                break
+        filters = list(access_filters)
+        filters_applied: list[tuple[str, str]] = []
 
-    selected_branch = branch_filter if branch_filter in BRANCHES else ""
-    selected_category = category_filter if category_filter in CATEGORIES else ""
+        selected_requester = ""
+        if admin:
+            requester_filter = (request.args.get("requester_email") or "").strip()
+            if requester_filter and requester_filter in requester_options:
+                filters.append(func.lower(Ticket.requester_email) == requester_filter.lower())
+                selected_requester = requester_filter
+                filters_applied.append(("Requester", requester_filter))
 
-    conditions = list(base_conditions)
-    params = list(base_params)
-    filters_applied: list[tuple[str, str]] = []
+        branch_filter = (request.args.get("branch") or "").strip()
+        selected_branch = ""
+        if branch_filter and branch_filter in branch_options:
+            filters.append(Ticket.branch == branch_filter)
+            selected_branch = branch_filter
+            filters_applied.append(("Branch", branch_filter))
 
-    if selected_requester:
-        conditions.append("LOWER(t.requester_email) = LOWER(?)")
-        params.append(selected_requester)
-        filters_applied.append(("Requester", selected_requester))
+        category_filter = (request.args.get("category") or "").strip()
+        selected_category = ""
+        if category_filter and category_filter in category_options:
+            filters.append(Ticket.category == category_filter)
+            selected_category = category_filter
+            filters_applied.append(("Category", category_filter))
 
-    if selected_branch:
-        conditions.append("t.branch = ?")
-        params.append(selected_branch)
-        filters_applied.append(("Branch", selected_branch))
+        entries = (
+            db_session.query(TicketFeedback)
+            .options(joinedload(TicketFeedback.ticket))
+            .join(Ticket)
+            .filter(*filters)
+            .order_by(TicketFeedback.submitted_at.desc(), TicketFeedback.id.desc())
+            .all()
+        )
 
-    if selected_category:
-        conditions.append("t.category = ?")
-        params.append(selected_category)
-        filters_applied.append(("Category", selected_category))
+        star_expressions = [
+            func.sum(case((TicketFeedback.rating == star, 1), else_=0)).label(f"star_{star}")
+            for star in range(1, 6)
+        ]
+        stats = (
+            db_session.query(
+                func.count(TicketFeedback.id).label("total"),
+                func.avg(TicketFeedback.rating).label("avg_rating"),
+                func.count(TicketFeedback.rating).label("rated_count"),
+                *star_expressions,
+            )
+            .join(Ticket)
+            .filter(*filters)
+            .one()
+        )
 
-    where_clause = ""
-    if conditions:
-        where_clause = " WHERE " + " AND ".join(conditions)
+        total_feedbacks = int(stats.total or 0)
+        rated_count = int(stats.rated_count or 0)
+        avg_value = stats.avg_rating
+        avg_rating = "—" if not rated_count or avg_value is None else f"{float(avg_value):.1f}"
+        star_counts = {
+            star: int(getattr(stats, f"star_{star}") or 0)
+            for star in range(1, 6)
+        }
+        max_star_count = max(star_counts.values()) if star_counts else 0
 
-    stats_row = db.execute(
-        f"""
-        SELECT
-            COUNT(*) AS total_feedbacks,
-            AVG(tf.rating) AS avg_rating,
-            SUM(CASE WHEN tf.rating = 5 THEN 1 ELSE 0 END) AS star_5,
-            SUM(CASE WHEN tf.rating = 4 THEN 1 ELSE 0 END) AS star_4,
-            SUM(CASE WHEN tf.rating = 3 THEN 1 ELSE 0 END) AS star_3,
-            SUM(CASE WHEN tf.rating = 2 THEN 1 ELSE 0 END) AS star_2,
-            SUM(CASE WHEN tf.rating = 1 THEN 1 ELSE 0 END) AS star_1
-        FROM ticket_feedback tf
-        JOIN tickets t ON t.id = tf.ticket_id
-        {where_clause}
-        """,
-        params,
-    ).fetchone()
-
-    total_feedbacks = int(stats_row["total_feedbacks"] or 0) if stats_row else 0
-    avg_value = stats_row["avg_rating"] if stats_row else None
-    avg_rating = f"{avg_value:.1f}" if avg_value is not None else "0.0"
-    star_counts = {
-        5: int(stats_row["star_5"] or 0) if stats_row else 0,
-        4: int(stats_row["star_4"] or 0) if stats_row else 0,
-        3: int(stats_row["star_3"] or 0) if stats_row else 0,
-        2: int(stats_row["star_2"] or 0) if stats_row else 0,
-        1: int(stats_row["star_1"] or 0) if stats_row else 0,
-    }
-
-    entries_rows = db.execute(
-        f"""
-        SELECT tf.ticket_id, tf.rating, tf.comments, tf.submitted_by,
-               CAST(tf.submitted_at AS TEXT) AS submitted_at,
-               t.title, t.branch, t.category
-        FROM ticket_feedback tf
-        JOIN tickets t ON t.id = tf.ticket_id
-        {where_clause}
-        ORDER BY datetime(tf.submitted_at) DESC, tf.id DESC
-        LIMIT 20
-        """,
-        params,
-    ).fetchall()
-    entries = [dict(row) for row in entries_rows]
-
-    return render_template_string(
-        FEEDBACK_ANALYTICS_HTML,
-        entries=entries,
-        avg_rating=avg_rating,
-        total_feedbacks=total_feedbacks,
-        star_counts=star_counts,
-        requester_options=requester_options,
-        branches=BRANCHES,
-        categories=CATEGORIES,
-        selected_requester=selected_requester,
-        selected_branch=selected_branch,
-        selected_category=selected_category,
-        filters_applied=filters_applied,
-        format_ts=format_timestamp,
-    )
+        return render_template_string(
+            FEEDBACK_ANALYTICS_HTML,
+            entries=entries,
+            avg_rating=avg_rating,
+            total_feedbacks=total_feedbacks,
+            star_counts=star_counts,
+            rated_count=rated_count,
+            max_star_count=max_star_count,
+            requester_options=requester_options,
+            branch_options=branch_options,
+            category_options=category_options,
+            selected_requester=selected_requester,
+            selected_branch=selected_branch,
+            selected_category=selected_category,
+            filters_applied=filters_applied,
+            show_requester_filter=admin,
+            results_count=len(entries),
+            format_ts=format_timestamp,
+            admin=admin,
+        )
+    finally:
+        db_session.close()
 
 
 @app.route("/kb/article/<int:article_id>")
