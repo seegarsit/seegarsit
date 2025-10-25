@@ -7,6 +7,6 @@ itsdangerous
 python-dotenv
 requests
 msal
-sqlalchemy
-psycopg[binary]
-greenlet
+SQLAlchemy>=2.0.29
+psycopg2-binary>=2.9.9
+greenlet>=3.0.1

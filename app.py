@@ -358,13 +358,18 @@ DB_PATH = _resolve_db_path()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-    app.logger.info("SQLAlchemy engine configured using DATABASE_URL")
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args={"sslmode": "require"},
+    )
 else:
     engine = create_engine(
-        f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}
+        f"sqlite:///{DB_PATH}",
+        connect_args={"check_same_thread": False},
     )
-    app.logger.info("SQLAlchemy engine configured for SQLite at %s", DB_PATH)
+
+app.logger.info("DB engine: %s", "Postgres" if DATABASE_URL else f"SQLite @ {DB_PATH}")
 
 SessionLocal = scoped_session(
     sessionmaker(bind=engine, autoflush=False, autocommit=False)
