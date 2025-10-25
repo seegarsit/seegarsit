@@ -262,6 +262,27 @@ def init_db():
             FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS kb_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            body TEXT NOT NULL,
+            tags TEXT,
+            source_ticket_id INTEGER,
+            created_at TIMESTAMP NOT NULL,
+            helpful_up INTEGER DEFAULT 0,
+            helpful_down INTEGER DEFAULT 0,
+            FOREIGN KEY(source_ticket_id) REFERENCES tickets(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS kb_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            article_id INTEGER UNIQUE NOT NULL,
+            embedding_json TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            FOREIGN KEY(article_id) REFERENCES kb_articles(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_ticket_feedback_ticket ON ticket_feedback(ticket_id);
 
         CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
@@ -269,6 +290,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tickets_branch ON tickets(branch);
         CREATE INDEX IF NOT EXISTS idx_comments_ticket ON comments(ticket_id);
         CREATE INDEX IF NOT EXISTS idx_attachments_ticket ON attachments(ticket_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_articles_created ON kb_articles(created_at);
+        CREATE INDEX IF NOT EXISTS idx_kb_articles_source ON kb_articles(source_ticket_id);
         """
     )
     db.commit()
