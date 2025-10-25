@@ -44,6 +44,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    func,
 )
 from sqlalchemy.orm import declarative_base, relationship, scoped_session, sessionmaker
 
@@ -2852,122 +2853,154 @@ def kb_article_vote(article_id: int):
 @app.route("/tickets")
 @login_required
 def tickets():
-    with app.app_context():
-        init_db()
-    db = get_db()
+    if not DATABASE_URL:
+        with app.app_context():
+            init_db()
+
     admin = is_admin_user()
-
-    sql = (
-        "SELECT id, title, requester_name, requester_email, branch, priority, category, "
-        "assignee, status, CAST(created_at AS TEXT) AS created_at, "
-        "CAST(updated_at AS TEXT) AS updated_at, CAST(completed_at AS TEXT) AS completed_at "
-        "FROM tickets"
-    )
-
-    params: list[str] = []
-    conditions: list[str] = []
-    filters_applied: list[tuple[str, str]] = []
 
     status_filter = (request.args.get("status") or "").strip()
     priority_filter = (request.args.get("priority") or "").strip()
     branch_filter = (request.args.get("branch") or "").strip()
     category_filter = (request.args.get("category") or "").strip()
 
+    filters_applied: list[tuple[str, str]] = []
+
     selected_status = status_filter if status_filter in STATUSES else ""
-    if selected_status:
-        conditions.append("status = ?")
-        params.append(selected_status)
-        filters_applied.append(("Status", selected_status))
-
     selected_priority = priority_filter if priority_filter in PRIORITIES else ""
-    if selected_priority:
-        conditions.append("priority = ?")
-        params.append(selected_priority)
-        filters_applied.append(("Priority", selected_priority))
-
     selected_branch = branch_filter if branch_filter in BRANCHES else ""
-    if selected_branch:
-        conditions.append("branch = ?")
-        params.append(selected_branch)
-        filters_applied.append(("Branch", selected_branch))
-
     selected_category = category_filter if category_filter in CATEGORIES else ""
-    if selected_category:
-        conditions.append("category = ?")
-        params.append(selected_category)
-        filters_applied.append(("Category", selected_category))
 
-    if not admin:
-        email = current_user_email()
-        if email:
-            conditions.insert(0, "LOWER(requester_email) = ?")
-            params.insert(0, email)
+    session = get_session()
+
+    try:
+        q = session.query(Ticket)
+
+        if selected_status:
+            q = q.filter(Ticket.status == selected_status)
+            filters_applied.append(("Status", selected_status))
+
+        if selected_priority:
+            q = q.filter(Ticket.priority == selected_priority)
+            filters_applied.append(("Priority", selected_priority))
+
+        if selected_branch:
+            q = q.filter(Ticket.branch == selected_branch)
+            filters_applied.append(("Branch", selected_branch))
+
+        if selected_category:
+            q = q.filter(Ticket.category == selected_category)
+            filters_applied.append(("Category", selected_category))
+
+        recent_feedback: list[dict[str, object]] = []
+
+        if not admin:
+            email = current_user_email()
+            if email:
+                q = q.filter(func.lower(Ticket.requester_email) == email)
+            else:
+                return render_template_string(
+                    DASHBOARD_HTML,
+                    tickets=[],
+                    statuses=STATUSES,
+                    priorities=PRIORITIES,
+                    admin=admin,
+                    stats={"total": 0, "open": 0, "completed": 0},
+                    category_stats=[],
+                    format_ts=format_timestamp,
+                    branches=BRANCHES,
+                    status_badges=STATUS_BADGES,
+                    priority_badges=PRIORITY_BADGES,
+                    selected_status="",
+                    selected_priority="",
+                    selected_branch="",
+                    selected_category="",
+                    categories=CATEGORIES,
+                    filters_applied=[],
+                    recent_feedback=recent_feedback,
+                )
         else:
-            tickets = []
-            stats = {"total": 0, "open": 0, "completed": 0}
-            category_stats: list[dict[str, str | int]] = []
-            return render_template_string(
-                DASHBOARD_HTML,
-                tickets=tickets,
-                statuses=STATUSES,
-                priorities=PRIORITIES,
-                admin=admin,
-                stats=stats,
-                category_stats=category_stats,
-                format_ts=format_timestamp,
-                branches=BRANCHES,
-                status_badges=STATUS_BADGES,
-                priority_badges=PRIORITY_BADGES,
-                selected_status="",
-                selected_priority="",
-                selected_branch="",
-                selected_category="",
-                categories=CATEGORIES,
-                filters_applied=[],
+            feedback_rows = (
+                session.query(TicketFeedback, Ticket)
+                .join(Ticket, TicketFeedback.ticket)
+                .order_by(TicketFeedback.submitted_at.desc())
+                .limit(10)
+                .all()
             )
+            for feedback, ticket in feedback_rows:
+                recent_feedback.append(
+                    {
+                        "ticket_id": ticket.id,
+                        "title": ticket.title,
+                        "rating": feedback.rating,
+                        "comments": feedback.comments,
+                        "submitted_by": feedback.submitted_by,
+                        "submitted_at": feedback.submitted_at,
+                        "branch": ticket.branch,
+                        "category": ticket.category,
+                    }
+                )
 
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
+        q = q.order_by(Ticket.created_at.desc(), Ticket.id.desc())
 
-    sql += " ORDER BY datetime(created_at) DESC, id DESC"
-    rows = db.execute(sql, params).fetchall()
-    tickets = [dict(row) for row in rows]
+        ticket_rows = q.all()
 
-    total = len(tickets)
-    completed = sum(1 for row in tickets if row.get("status") in COMPLETED_STATUSES)
-    open_count = total - completed
+        tickets = [
+            {
+                "id": row.id,
+                "title": row.title,
+                "requester_name": row.requester_name,
+                "requester_email": row.requester_email,
+                "branch": row.branch,
+                "priority": row.priority,
+                "category": row.category,
+                "assignee": row.assignee,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "completed_at": row.completed_at,
+            }
+            for row in ticket_rows
+        ]
 
-    category_counter: Counter[str] = Counter()
-    for row in tickets:
-        category = (row.get("category") or "Uncategorized").strip() or "Uncategorized"
-        category_counter[category] += 1
+        total = len(tickets)
+        completed = sum(1 for row in tickets if row.get("status") in COMPLETED_STATUSES)
+        open_count = total - completed
 
-    category_stats = [
-        {"category": name, "count": count}
-        for name, count in category_counter.most_common()
-    ]
+        category_counter: Counter[str] = Counter()
+        for row in tickets:
+            category = (row.get("category") or "Uncategorized").strip() or "Uncategorized"
+            category_counter[category] += 1
 
-    stats = {"total": total, "open": open_count, "completed": completed}
+        category_stats = [
+            {"category": name, "count": count}
+            for name, count in category_counter.most_common()
+        ]
 
-    return render_template_string(
-        DASHBOARD_HTML,
-        tickets=tickets,
-        statuses=STATUSES,
-        priorities=PRIORITIES,
-        admin=admin,
-        stats=stats,
-        category_stats=category_stats,
-        format_ts=format_timestamp,
-        branches=BRANCHES,
-        status_badges=STATUS_BADGES,
-        priority_badges=PRIORITY_BADGES,
-        selected_status=selected_status,
-        selected_priority=selected_priority,
-        selected_branch=selected_branch,
-        selected_category=selected_category,
-        categories=CATEGORIES,
-        filters_applied=filters_applied,
-    )
+        stats = {"total": total, "open": open_count, "completed": completed}
+
+        return render_template_string(
+            DASHBOARD_HTML,
+            tickets=tickets,
+            statuses=STATUSES,
+            priorities=PRIORITIES,
+            admin=admin,
+            stats=stats,
+            category_stats=category_stats,
+            format_ts=format_timestamp,
+            branches=BRANCHES,
+            status_badges=STATUS_BADGES,
+            priority_badges=PRIORITY_BADGES,
+            selected_status=selected_status,
+            selected_priority=selected_priority,
+            selected_branch=selected_branch,
+            selected_category=selected_category,
+            categories=CATEGORIES,
+            filters_applied=filters_applied,
+            recent_feedback=recent_feedback,
+        )
+    finally:
+        session.close()
 
 
 @app.route("/new", methods=["GET", "POST"])
