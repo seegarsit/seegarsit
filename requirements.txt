@@ -7,3 +7,6 @@ itsdangerous
 python-dotenv
 requests
 msal
+sqlalchemy
+psycopg[binary]
+greenlet
