@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
-from typing import Optional
 from functools import wraps
 from pathlib import Path
+from typing import Optional
+from urllib.parse import quote
 
 from collections import Counter
 
@@ -22,22 +24,79 @@ from flask import (
     session,
     url_for,
 )
-from markupsafe import escape
-from jinja2 import DictLoader
-from msal import ConfidentialClientApplication
 import uuid
+
 import requests
+from jinja2 import DictLoader
+from markupsafe import escape
+from msal import ConfidentialClientApplication
 from werkzeug.utils import secure_filename
 
-def send_email(to_addrs, subject, html_body):
-    """Send an email via Microsoft Graph using the current user's access token."""
-    token = session.get("access_token")
-    if not token:
-        # Not signed in (or token expired); skip quietly for now
+GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
+_app_token_cache: dict[str, float | str] = {"token": "", "expires": 0.0}
+
+
+def _graph_send_mail(token: str, endpoint: str, payload: dict) -> bool:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+    except Exception as exc:
+        app.logger.warning("Graph sendMail request failed: %s", exc)
         return False
+    if resp.status_code in (200, 202):
+        return True
+    app.logger.warning(
+        "Graph sendMail returned %s: %s",
+        resp.status_code,
+        resp.text[:200],
+    )
+    return False
+
+
+def _get_app_graph_token() -> str | None:
+    if not (CLIENT_ID and CLIENT_SECRET and AUTHORITY):
+        return None
+    now = time.time()
+    cached_token = _app_token_cache.get("token") or ""
+    expires = float(_app_token_cache.get("expires") or 0.0)
+    if cached_token and now < expires - 60:
+        return str(cached_token)
+    try:
+        result = msal_app().acquire_token_for_client(scopes=[GRAPH_DEFAULT_SCOPE])
+    except Exception as exc:
+        app.logger.warning("Unable to acquire app token: %s", exc)
+        return None
+    token = result.get("access_token")
+    if not token:
+        error = result.get("error_description") or result.get("error") or "Unknown error"
+        app.logger.warning("App token missing from MSAL response: %s", error)
+        return None
+    expires_in = int(result.get("expires_in") or 0)
+    _app_token_cache["token"] = token
+    _app_token_cache["expires"] = now + max(0, expires_in)
+    return token
+
+
+def _resolve_sender_address() -> Optional[str]:
+    configured = os.getenv("MICROSOFT_MAIL_SENDER")
+    if configured:
+        return configured.strip()
+    if ADMIN_EMAILS:
+        return sorted(ADMIN_EMAILS)[0]
+    return None
+
+
+def send_email(to_addrs, subject, html_body):
+    """Send an email via Microsoft Graph using delegated or application tokens."""
 
     if isinstance(to_addrs, str):
         to_addrs = [to_addrs]
+    to_addrs = [addr for addr in to_addrs if addr]
+    if not to_addrs:
+        return False
 
     payload = {
         "message": {
@@ -46,21 +105,20 @@ def send_email(to_addrs, subject, html_body):
             "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs],
         }
     }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
 
-    try:
-        resp = requests.post(
-            "https://graph.microsoft.com/v1.0/me/sendMail",
-            headers=headers,
-            json=payload,
-            timeout=10,
-        )
-        return resp.status_code in (200, 202)
-    except Exception:
-        return False
+    token = session.get("access_token")
+    if token and _graph_send_mail(token, "https://graph.microsoft.com/v1.0/me/sendMail", payload):
+        return True
+
+    sender = _resolve_sender_address()
+    app_token = _get_app_graph_token()
+    if sender and app_token:
+        endpoint = f"https://graph.microsoft.com/v1.0/users/{quote(sender)}/sendMail"
+        if _graph_send_mail(app_token, endpoint, payload):
+            return True
+
+    app.logger.warning("Failed to send email to %s", ", ".join(to_addrs))
+    return False
 
 # --------------------------------------------------------------------------------------
 # Flask app config
@@ -1658,7 +1716,8 @@ def new_ticket():
         <strong>Category:</strong> {data['category']}</p>
         <p><strong>Issue Description:</strong><br>{description_html}</p>
         """
-        send_email("brad@seegarsfence.com", subject_admin, body_admin)
+        admin_recipients = sorted(ADMIN_EMAILS) or ["brad@seegarsfence.com"]
+        send_email(admin_recipients, subject_admin, body_admin)
 
         if data["requester_email"]:
             ticket_link = ticket_detail_link(ticket_id)
