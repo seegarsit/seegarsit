@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 from functools import wraps
+from pathlib import Path
 
 from collections import Counter
 
@@ -66,8 +67,65 @@ def send_email(to_addrs, subject, html_body):
 # --------------------------------------------------------------------------------------
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "dev-secret")
-DB_PATH = os.environ.get("TICKETS_DB", "app.db")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB overall request cap
+
+
+def _candidate_path_from_env(value: str) -> Path | None:
+    """Return a filesystem path for supported SQLite URI formats."""
+
+    cleaned = value.strip()
+    if not cleaned or cleaned == ":memory:":
+        return None
+
+    # SQLite supports URIs such as sqlite:///path/to/db.sqlite or sqlite://relative.db
+    if cleaned.startswith("sqlite:///"):
+        cleaned = cleaned[len("sqlite:///"):]
+    elif cleaned.startswith("sqlite://"):
+        cleaned = cleaned[len("sqlite://"):]
+
+    if cleaned == ":memory:":
+        return None
+
+    if cleaned.startswith("file:") or "://" in cleaned:
+        # Treat as a raw SQLite connection string (e.g., file::memory:?cache=shared)
+        return None
+
+    if "?" in cleaned:
+        cleaned = cleaned.split("?", 1)[0]
+
+    return Path(cleaned)
+
+
+def _resolve_db_path(
+    env_override: str | None = None,
+    data_dir_override: str | None = None,
+) -> str:
+    """Determine the SQLite database location and ensure the directory exists."""
+
+    env_value = env_override if env_override is not None else os.environ.get("TICKETS_DB")
+    data_dir = data_dir_override if data_dir_override is not None else os.environ.get("RENDER_DATA_DIR")
+
+    candidate: Path | None = None
+    if env_value:
+        path_candidate = _candidate_path_from_env(env_value)
+        if path_candidate is None:
+            return env_value
+        candidate = path_candidate.expanduser()
+    else:
+        base_dir = Path(data_dir) if data_dir else Path(app.instance_path)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        candidate = (base_dir / "tickets.db").expanduser()
+
+    if not candidate.is_absolute():
+        base_dir = Path(data_dir) if data_dir else Path(app.instance_path)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        candidate = (base_dir / candidate).resolve()
+
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    return str(candidate)
+
+
+DB_PATH = _resolve_db_path()
 
 # Microsoft Entra (Azure AD / M365) app details come from environment variables on Render
 CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
