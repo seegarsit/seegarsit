@@ -2714,6 +2714,9 @@ def feedback_analytics():
     if not is_admin_user() and not session.get("user"):
         return redirect(url_for("login"))
 
+    if not DATABASE_URL:
+        init_db()
+
     admin = is_admin_user()
     db_session = SessionLocal()
     try:
