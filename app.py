@@ -3332,47 +3332,41 @@ def update_status(ticket_id: int):
         abort(403)
     with app.app_context():
         init_db()
-    status = (request.form.get("status") or "Open").strip()
-    if status not in STATUSES:
-        status = "Open"
-    db = get_db()
-    ticket_row = db.execute(
-        """
-        SELECT status, title, requester_name, requester_email, feedback_token
-        FROM tickets
-        WHERE id = ?
-        """,
-        (ticket_id,),
-    ).fetchone()
-    if not ticket_row:
+    new_status = (request.form.get("status") or "Open").strip()
+    if new_status not in STATUSES:
+        new_status = "Open"
+    session: Session = get_session()
+    ticket = session.get(Ticket, ticket_id)
+    if not ticket:
         flash("Ticket not found.")
         return redirect(url_for("tickets"))
-    previous_status = ticket_row["status"]
+    previous_status = ticket.status
     ts = now_ts()
-    completed_at = ts if status in COMPLETED_STATUSES else None
-    feedback_token = ticket_row["feedback_token"] or generate_feedback_token()
-    db.execute(
-        """
-        UPDATE tickets
-        SET status = ?, updated_at = ?, completed_at = ?, feedback_token = COALESCE(feedback_token, ?)
-        WHERE id = ?
-        """,
-        (status, ts, completed_at, feedback_token, ticket_id),
-    )
-    db.commit()
+    ticket.status = new_status
+    ticket.updated_at = ts
+    ticket.completed_at = ts if new_status in COMPLETED_STATUSES else None
+    if not ticket.feedback_token:
+        ticket.feedback_token = generate_feedback_token()
+    session.commit()
+    ticket_row = {
+        "title": ticket.title,
+        "requester_name": ticket.requester_name,
+        "requester_email": ticket.requester_email,
+        "feedback_token": ticket.feedback_token,
+    }
     if (
         ticket_row["requester_email"]
-        and previous_status != status
+        and previous_status != new_status
     ):
         ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
         requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
         ticket_link = ticket_detail_link(ticket_id)
-        if status in COMPLETED_STATUSES and previous_status not in COMPLETED_STATUSES:
-            feedback_url = ticket_feedback_link(ticket_id, feedback_token)
+        if new_status in COMPLETED_STATUSES and previous_status not in COMPLETED_STATUSES:
+            feedback_url = ticket_feedback_link(ticket_id, ticket.feedback_token or "")
             subject = f"Ticket completed: {ticket_title}"
             body_html = f"""
             <p>Hi {escape(requester_name)},</p>
-            <p>Your ticket <strong>{escape(ticket_title)}</strong> has been marked <strong>{escape(status)}</strong>.</p>
+            <p>Your ticket <strong>{escape(ticket_title)}</strong> has been marked <strong>{escape(new_status)}</strong>.</p>
             <p>You can review the final details on the <a href="{ticket_link}">ticket page</a>.</p>
             <p>We value your perspective. Please take a moment to <a href="{feedback_url}">share feedback on this experience</a>.</p>
             <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
@@ -3381,7 +3375,7 @@ def update_status(ticket_id: int):
             subject = f"Ticket status update: {ticket_title}"
             body_html = f"""
             <p>Hi {escape(requester_name)},</p>
-            <p>Your ticket <strong>{escape(ticket_title)}</strong> is now marked <strong>{escape(status)}</strong>.</p>
+            <p>Your ticket <strong>{escape(ticket_title)}</strong> is now marked <strong>{escape(new_status)}</strong>.</p>
             <p><a href="{ticket_link}">Open your ticket</a> to review progress or add more information.</p>
             <p>Thank you,<br><br>Brad Wells<br>IT Manager</p>
             """
@@ -3398,24 +3392,20 @@ def update_assignee(ticket_id: int):
     with app.app_context():
         init_db()
     assignee = (request.form.get("assignee") or "").strip()
-    db = get_db()
-    ticket_row = db.execute(
-        """
-        SELECT assignee, title, requester_name, requester_email
-        FROM tickets
-        WHERE id = ?
-        """,
-        (ticket_id,),
-    ).fetchone()
-    if not ticket_row:
+    session: Session = get_session()
+    ticket = session.get(Ticket, ticket_id)
+    if not ticket:
         flash("Ticket not found.")
         return redirect(url_for("tickets"))
-    previous_assignee = (ticket_row["assignee"] or "").strip()
-    db.execute(
-        "UPDATE tickets SET assignee = ?, updated_at = ? WHERE id = ?",
-        (assignee, now_ts(), ticket_id),
-    )
-    db.commit()
+    previous_assignee = (ticket.assignee or "").strip()
+    ticket.assignee = assignee
+    ticket.updated_at = now_ts()
+    session.commit()
+    ticket_row = {
+        "title": ticket.title,
+        "requester_name": ticket.requester_name,
+        "requester_email": ticket.requester_email,
+    }
     if ticket_row["requester_email"] and assignee != previous_assignee:
         ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
         requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
