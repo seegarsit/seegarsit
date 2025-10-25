@@ -21,6 +21,7 @@ from flask import (
     session,
     url_for,
 )
+from markupsafe import escape
 from jinja2 import DictLoader
 from msal import ConfidentialClientApplication
 import uuid
@@ -112,7 +113,8 @@ def init_db():
             status TEXT CHECK(status IN ('Open','In Progress','Waiting','Resolved','Closed')) DEFAULT 'Open',
             created_at TIMESTAMP NOT NULL,
             updated_at TIMESTAMP NOT NULL,
-            completed_at TIMESTAMP
+            completed_at TIMESTAMP,
+            feedback_token TEXT
         );
 
         CREATE TABLE IF NOT EXISTS comments (
@@ -134,6 +136,18 @@ def init_db():
             FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS ticket_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+            comments TEXT,
+            submitted_by TEXT,
+            submitted_at TIMESTAMP NOT NULL,
+            FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_feedback_ticket ON ticket_feedback(ticket_id);
+
         CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
         CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
         CREATE INDEX IF NOT EXISTS idx_tickets_branch ON tickets(branch);
@@ -150,6 +164,24 @@ def init_db():
     except sqlite3.OperationalError:
         # Column already exists
         pass
+
+    try:
+        db.execute("ALTER TABLE tickets ADD COLUMN feedback_token TEXT")
+        db.commit()
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
+
+    rows = db.execute(
+        "SELECT id FROM tickets WHERE feedback_token IS NULL OR feedback_token = ''"
+    ).fetchall()
+    if rows:
+        for row in rows:
+            db.execute(
+                "UPDATE tickets SET feedback_token = ? WHERE id = ?",
+                (generate_feedback_token(), row["id"]),
+            )
+        db.commit()
 
 # --------------------------------------------------------------------------------------
 # Auth helpers
@@ -209,6 +241,14 @@ CATEGORIES = [
     "Other",
 ]
 
+FEEDBACK_RATING_OPTIONS = [
+    (5, "Excellent"),
+    (4, "Good"),
+    (3, "Fair"),
+    (2, "Needs improvement"),
+    (1, "Poor"),
+]
+
 def _load_admin_emails() -> set[str]:
     """Return the set of admin email addresses configured for the app."""
 
@@ -221,6 +261,10 @@ ADMIN_EMAILS = _load_admin_emails()
 
 def now_ts():
     return datetime.now(timezone.utc).isoformat()
+
+
+def generate_feedback_token() -> str:
+    return uuid.uuid4().hex
 
 
 def format_file_size(num_bytes: int) -> str:
@@ -249,6 +293,65 @@ def current_user_email() -> Optional[str]:
 def is_admin_user() -> bool:
     email = current_user_email()
     return bool(email and email in ADMIN_EMAILS)
+
+
+def get_ticket_contact(ticket_id: int, db: Optional[sqlite3.Connection] = None):
+    if db is None:
+        db = get_db()
+    row = db.execute(
+        """
+        SELECT id, title, requester_name, requester_email, feedback_token
+        FROM tickets
+        WHERE id = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
+    return row
+
+
+def ensure_ticket_feedback_token(ticket_id: int, db: Optional[sqlite3.Connection] = None) -> str:
+    if db is None:
+        db = get_db()
+    row = get_ticket_contact(ticket_id, db=db)
+    if not row:
+        return ""
+    token = row["feedback_token"]
+    if token:
+        return token
+    token = generate_feedback_token()
+    db.execute(
+        "UPDATE tickets SET feedback_token = ? WHERE id = ?",
+        (token, ticket_id),
+    )
+    db.commit()
+    return token
+
+
+def ticket_detail_link(ticket_id: int) -> str:
+    return url_for("ticket_detail", ticket_id=ticket_id, _external=True)
+
+
+def ticket_feedback_link(ticket_id: int, token: str) -> str:
+    return url_for("ticket_feedback", ticket_id=ticket_id, token=token, _external=True)
+
+
+def send_ticket_notification(
+    ticket_row: sqlite3.Row,
+    subject: str,
+    body_html: str,
+):
+    email = (ticket_row or {}).get("requester_email") if isinstance(ticket_row, dict) else None
+    if ticket_row and not isinstance(ticket_row, dict):
+        email = ticket_row["requester_email"]
+    if not email:
+        return False
+    # Normalize to dict for templating convenience
+    if not isinstance(ticket_row, dict):
+        ticket_row = dict(ticket_row)
+    recipient = ticket_row.get("requester_email")
+    if not recipient:
+        return False
+    return send_email(recipient, subject, body_html)
 
 
 def format_timestamp(value: Optional[str]) -> str:
@@ -801,6 +904,28 @@ DASHBOARD_HTML = """
         <div class="text-secondary small">Interactive filtering coming soon — adjust presets above and save your favourite view.</div>
       </form>
     </div>
+    {% if admin %}
+    <div class="surface-card p-4 mt-4">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h5 class="mb-0">Recent Feedback</h5>
+        <span class="badge-chip badge-complete"><i class="bi bi-chat-heart"></i>{{ feedback_entries|length }}</span>
+      </div>
+      <div class="d-flex flex-column gap-3">
+        {% for fb in feedback_entries %}
+        <div class="border rounded p-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <strong class="small">{{ fb.ticket_title or ('Ticket #' ~ fb.ticket_id) }}</strong>
+            {% if fb.rating %}<span class="text-warning small">{{ fb.rating }}/5</span>{% endif %}
+          </div>
+          <p class="mb-1 small">{{ fb.comments or 'No comments provided.' }}</p>
+          <div class="text-secondary small">{{ format_ts(fb.submitted_at) }}</div>
+        </div>
+        {% else %}
+        <p class="text-secondary small mb-0">Feedback will appear here after tickets close.</p>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
   </div>
   <div class="col-lg-8 col-xl-9">
     <div class="surface-card p-0 overflow-hidden">
@@ -1117,6 +1242,29 @@ DETAIL_HTML = """
       <p class="text-secondary small mb-0">No attachments uploaded for this ticket.</p>
       {% endif %}
     </div>
+    {% if admin %}
+    <div class="surface-card p-4 mb-4">
+      <h5 class="fw-semibold mb-3">Requester feedback</h5>
+      {% if feedback_entries %}
+      <div class="d-flex flex-column gap-3">
+        {% for fb in feedback_entries %}
+        <div class="p-3 border rounded bg-body-tertiary">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="fw-semibold small">Rating: {{ fb.rating or 'N/A' }}{% if fb.rating %}/5{% endif %}</div>
+            <div class="text-secondary small">{{ format_ts(fb.submitted_at) }}</div>
+          </div>
+          <p class="mb-1">{{ fb.comments or 'No comments provided.' }}</p>
+          {% if fb.submitted_by %}
+          <div class="text-secondary small">— {{ fb.submitted_by }}</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-secondary small mb-0">No feedback submitted yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
     <div class="surface-card p-4">
       <h5 class="fw-semibold mb-3">Ticket controls</h5>
       {% if admin %}
@@ -1138,6 +1286,74 @@ DETAIL_HTML = """
       </form>
       {% else %}
       <p class="text-secondary small mb-0">Ticket updates are managed by the Seegars IT administrators. Reach out if you need to escalate an issue.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+FEEDBACK_HTML = """
+{% extends 'base.html' %}
+{% block workspace_content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7 col-xl-6">
+    <div class="surface-card p-4 p-md-5">
+      {% if ticket %}
+        <span class="badge-chip badge-open text-uppercase small mb-2"><i class="bi bi-stars"></i> Ticket {{ ticket.id }}</span>
+        <h1 class="fw-semibold mb-3">Share your feedback</h1>
+        <p class="text-secondary">We appreciate you taking a moment to let us know how the Seegars IT team handled "{{ ticket.title }}".</p>
+      {% else %}
+        <h1 class="fw-semibold mb-3">Share your feedback</h1>
+      {% endif %}
+      {% if error %}
+        <div class="alert alert-danger" role="alert">{{ error }}</div>
+      {% endif %}
+      {% if submitted %}
+        <div class="text-center py-4">
+          <div class="display-6 text-success mb-3"><i class="bi bi-emoji-smile"></i></div>
+          <h2 class="fw-semibold">Thank you!</h2>
+          <p class="text-secondary">Your feedback helps us improve our support experience.</p>
+          {% if ticket_link %}
+          <a class="btn btn-outline-dark" href="{{ ticket_link }}">Return to ticket</a>
+          {% endif %}
+        </div>
+      {% elif show_form %}
+        <form method="post" class="d-flex flex-column gap-3">
+          <input type="hidden" name="token" value="{{ token }}">
+          <div>
+            <label class="form-label text-uppercase small">Overall experience</label>
+            <select name="rating" class="form-select">
+              <option value="">Choose a rating</option>
+              {% for value, label in rating_choices %}
+              <option value="{{ value }}" {% if rating|string == value|string %}selected{% endif %}>{{ value }} – {{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="form-label text-uppercase small">Comments</label>
+            <textarea name="comments" class="form-control" rows="4" placeholder="Tell us what worked well or what we can improve">{{ comments or '' }}</textarea>
+          </div>
+          <div>
+            <label class="form-label text-uppercase small">Your name (optional)</label>
+            <input name="submitted_by" class="form-control" placeholder="e.g., Alex Johnson" value="{{ submitted_by or '' }}">
+          </div>
+          <div class="d-flex justify-content-end gap-2">
+            {% if ticket_link %}
+            <a class="btn btn-outline-dark" href="{{ ticket_link }}">Back to ticket</a>
+            {% endif %}
+            <button class="btn btn-primary" type="submit"><i class="bi bi-send"></i> Submit feedback</button>
+          </div>
+        </form>
+      {% else %}
+        <div class="text-center py-4">
+          <div class="display-6 text-warning mb-3"><i class="bi bi-exclamation-triangle"></i></div>
+          <p class="text-secondary">This feedback link is no longer available. Please contact Seegars IT if you need assistance.</p>
+          {% if ticket_link %}
+          <a class="btn btn-outline-dark" href="{{ ticket_link }}">Go to ticket</a>
+          {% endif %}
+        </div>
       {% endif %}
     </div>
   </div>
@@ -1238,6 +1454,7 @@ def tickets():
                 branches=BRANCHES,
                 status_badges=STATUS_BADGES,
                 priority_badges=PRIORITY_BADGES,
+                feedback_entries=[],
             )
 
     sql += " ORDER BY datetime(created_at) DESC, id DESC"
@@ -1260,6 +1477,21 @@ def tickets():
 
     stats = {"total": total, "open": open_count, "completed": completed}
 
+    feedback_entries: list[dict[str, object]] = []
+    if admin:
+        feedback_rows = db.execute(
+            """
+            SELECT tf.ticket_id, tf.rating, tf.comments, tf.submitted_by,
+                   CAST(tf.submitted_at AS TEXT) AS submitted_at,
+                   t.title AS ticket_title
+            FROM ticket_feedback tf
+            JOIN tickets t ON t.id = tf.ticket_id
+            ORDER BY datetime(tf.submitted_at) DESC, tf.id DESC
+            LIMIT 10
+            """,
+        ).fetchall()
+        feedback_entries = [dict(row) for row in feedback_rows]
+
     return render_template_string(
         DASHBOARD_HTML,
         tickets=tickets,
@@ -1272,6 +1504,7 @@ def tickets():
         branches=BRANCHES,
         status_badges=STATUS_BADGES,
         priority_badges=PRIORITY_BADGES,
+        feedback_entries=feedback_entries,
     )
 
 
@@ -1313,14 +1546,15 @@ def new_ticket():
             )
 
         ts = now_ts()
+        feedback_token = generate_feedback_token()
         db = get_db()
         cur = db.execute(
             """
             INSERT INTO tickets (
                 title, description, requester_name, requester_email, branch, priority,
-                category, assignee, status, created_at, updated_at, completed_at
+                category, assignee, status, created_at, updated_at, completed_at, feedback_token
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, NULL, ?)
             """,
             (
                 data["title"],
@@ -1332,7 +1566,8 @@ def new_ticket():
                 data["category"],
                 ASSIGNEE_DEFAULT,
                 ts,
-                ts
+                ts,
+                feedback_token,
             )
         )
         ticket_id = cur.lastrowid
@@ -1368,6 +1603,7 @@ def new_ticket():
         send_email("brad@seegarsfence.com", subject_admin, body_admin)
 
         if data["requester_email"]:
+            ticket_link = ticket_detail_link(ticket_id)
             subject_user = "Your ticket to Seegars IT has been received"
             body_user = f"""
             <p>Hi {data['requester_name'] or ''},</p>
@@ -1378,6 +1614,7 @@ def new_ticket():
             Branch: {data['branch']}<br>
             Category: {data['category']}</p>
             <p><strong>Issue Description:</strong><br>{description_html}</p>
+            <p><a href="{ticket_link}">View your ticket</a> any time to share additional details or check progress.</p>
             <p><em>We appreciate your patience — our goal is to keep your tech running smoothly!</em></p>
             """
             send_email(data["requester_email"], subject_user, body_user)
@@ -1415,6 +1652,7 @@ def ticket_detail(ticket_id: int):
     if not t:
         flash("Ticket not found.")
         return redirect(url_for("tickets"))
+    admin = is_admin_user()
     comments = db.execute(
         """
         SELECT id, ticket_id, author, body, CAST(created_at AS TEXT) AS created_at
@@ -1442,16 +1680,29 @@ def ticket_detail(ticket_id: int):
         }
         for row in attachments_rows
     ]
+    feedback_entries: list[dict[str, object]] = []
+    if admin:
+        feedback_rows = db.execute(
+            """
+            SELECT rating, comments, submitted_by, CAST(submitted_at AS TEXT) AS submitted_at
+            FROM ticket_feedback
+            WHERE ticket_id = ?
+            ORDER BY datetime(submitted_at) DESC, id DESC
+            """,
+            (ticket_id,),
+        ).fetchall()
+        feedback_entries = [dict(row) for row in feedback_rows]
     return render_template_string(
         DETAIL_HTML,
         t=dict(t),
         comments=[dict(c) for c in comments],
         attachments=attachments,
         statuses=STATUSES,
-        admin=is_admin_user(),
+        admin=admin,
         format_ts=format_timestamp,
         status_badges=STATUS_BADGES,
         priority_badges=PRIORITY_BADGES,
+        feedback_entries=feedback_entries,
     )
 
 
@@ -1496,6 +1747,25 @@ def add_comment(ticket_id: int):
     )
     db.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", (now_ts(), ticket_id))
     db.commit()
+    if is_admin_user():
+        ticket_row = get_ticket_contact(ticket_id, db=db)
+        if ticket_row:
+            requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
+            ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
+            comment_html = str(escape(body)).replace("\n", "<br>")
+            author_label = (author or "Seegars IT").strip() or "Seegars IT"
+            ticket_link = ticket_detail_link(ticket_id)
+            subject = f"Ticket update: {ticket_title}"
+            body_html = f"""
+            <p>Hi {escape(requester_name)},</p>
+            <p>{escape(author_label)} added a new update to your ticket <strong>{escape(ticket_title)}</strong>.</p>
+            <div style="border-left:4px solid #008752;padding-left:12px;margin:16px 0;">
+              <p style=\"margin:0;\">{comment_html}</p>
+            </div>
+            <p><a href="{ticket_link}">Open your ticket</a> to review the update or add more details.</p>
+            <p>Thank you,<br>Seegars IT</p>
+            """
+            send_ticket_notification(ticket_row, subject, body_html)
     flash("Comment added.")
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))
 
@@ -1511,13 +1781,56 @@ def update_status(ticket_id: int):
     if status not in STATUSES:
         status = "Open"
     db = get_db()
+    ticket_row = db.execute(
+        """
+        SELECT status, title, requester_name, requester_email, feedback_token
+        FROM tickets
+        WHERE id = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
+    if not ticket_row:
+        flash("Ticket not found.")
+        return redirect(url_for("tickets"))
+    previous_status = ticket_row["status"]
     ts = now_ts()
     completed_at = ts if status in COMPLETED_STATUSES else None
+    feedback_token = ticket_row["feedback_token"] or generate_feedback_token()
     db.execute(
-        "UPDATE tickets SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
-        (status, ts, completed_at, ticket_id),
+        """
+        UPDATE tickets
+        SET status = ?, updated_at = ?, completed_at = ?, feedback_token = COALESCE(feedback_token, ?)
+        WHERE id = ?
+        """,
+        (status, ts, completed_at, feedback_token, ticket_id),
     )
     db.commit()
+    if (
+        ticket_row["requester_email"]
+        and previous_status != status
+    ):
+        ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
+        requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
+        ticket_link = ticket_detail_link(ticket_id)
+        if status in COMPLETED_STATUSES and previous_status not in COMPLETED_STATUSES:
+            feedback_url = ticket_feedback_link(ticket_id, feedback_token)
+            subject = f"Ticket completed: {ticket_title}"
+            body_html = f"""
+            <p>Hi {escape(requester_name)},</p>
+            <p>Your ticket <strong>{escape(ticket_title)}</strong> has been marked <strong>{escape(status)}</strong>.</p>
+            <p>You can review the final details on the <a href="{ticket_link}">ticket page</a>.</p>
+            <p>We value your perspective. Please take a moment to <a href="{feedback_url}">share feedback on this experience</a>.</p>
+            <p>Thank you,<br>Seegars IT</p>
+            """
+        else:
+            subject = f"Ticket status update: {ticket_title}"
+            body_html = f"""
+            <p>Hi {escape(requester_name)},</p>
+            <p>Your ticket <strong>{escape(ticket_title)}</strong> is now marked <strong>{escape(status)}</strong>.</p>
+            <p><a href="{ticket_link}">Open your ticket</a> to review progress or add more information.</p>
+            <p>Thank you,<br>Seegars IT</p>
+            """
+        send_ticket_notification(ticket_row, subject, body_html)
     flash("Status updated.")
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))
 
@@ -1531,13 +1844,154 @@ def update_assignee(ticket_id: int):
         init_db()
     assignee = (request.form.get("assignee") or "").strip()
     db = get_db()
+    ticket_row = db.execute(
+        """
+        SELECT assignee, title, requester_name, requester_email
+        FROM tickets
+        WHERE id = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
+    if not ticket_row:
+        flash("Ticket not found.")
+        return redirect(url_for("tickets"))
+    previous_assignee = (ticket_row["assignee"] or "").strip()
     db.execute(
         "UPDATE tickets SET assignee = ?, updated_at = ? WHERE id = ?",
         (assignee, now_ts(), ticket_id),
     )
     db.commit()
+    if ticket_row["requester_email"] and assignee != previous_assignee:
+        ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
+        requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
+        ticket_link = ticket_detail_link(ticket_id)
+        assignee_label = assignee or "Unassigned"
+        subject = f"Ticket assignment update: {ticket_title}"
+        body_html = f"""
+        <p>Hi {escape(requester_name)},</p>
+        <p>Your ticket <strong>{escape(ticket_title)}</strong> has been assigned to <strong>{escape(assignee_label)}</strong>.</p>
+        <p><a href="{ticket_link}">Open your ticket</a> if you have more information to share.</p>
+        <p>Thank you,<br>Seegars IT</p>
+        """
+        send_ticket_notification(ticket_row, subject, body_html)
     flash("Assignee updated.")
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))
+
+
+@app.route("/ticket/<int:ticket_id>/feedback", methods=["GET", "POST"])
+def ticket_feedback(ticket_id: int):
+    with app.app_context():
+        init_db()
+    db = get_db()
+    token = (request.values.get("token") or "").strip()
+    ticket_row = db.execute(
+        """
+        SELECT id, title, requester_name, feedback_token
+        FROM tickets
+        WHERE id = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
+    if not ticket_row:
+        return (
+            render_template_string(
+                FEEDBACK_HTML,
+                ticket=None,
+                show_form=False,
+                submitted=False,
+                error="We couldn't find that ticket.",
+                rating_choices=FEEDBACK_RATING_OPTIONS,
+                rating="",
+                comments="",
+                submitted_by="",
+                token=token,
+                ticket_link=None,
+            ),
+            404,
+        )
+
+    expected_token = ticket_row["feedback_token"] or ensure_ticket_feedback_token(ticket_id, db=db)
+    ticket_link = ticket_detail_link(ticket_id)
+    if not token or token != expected_token:
+        return (
+            render_template_string(
+                FEEDBACK_HTML,
+                ticket=dict(ticket_row),
+                show_form=False,
+                submitted=False,
+                error="This feedback link is no longer valid.",
+                rating_choices=FEEDBACK_RATING_OPTIONS,
+                rating="",
+                comments="",
+                submitted_by="",
+                token="",
+                ticket_link=ticket_link,
+            ),
+            403,
+        )
+
+    if request.method == "POST":
+        rating_raw = (request.form.get("rating") or "").strip()
+        comments = (request.form.get("comments") or "").strip()
+        submitted_by = (request.form.get("submitted_by") or "").strip()
+        rating = None
+        if rating_raw:
+            try:
+                rating = int(rating_raw)
+            except ValueError:
+                rating = None
+        if rating is not None and rating not in {1, 2, 3, 4, 5}:
+            rating = None
+        if not rating and not comments:
+            return render_template_string(
+                FEEDBACK_HTML,
+                ticket=dict(ticket_row),
+                show_form=True,
+                submitted=False,
+                error="Please select a rating or leave a comment.",
+                rating_choices=FEEDBACK_RATING_OPTIONS,
+                rating=rating_raw,
+                comments=comments,
+                submitted_by=submitted_by,
+                token=token,
+                ticket_link=ticket_link,
+            )
+        db.execute(
+            """
+            INSERT INTO ticket_feedback (ticket_id, rating, comments, submitted_by, submitted_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (ticket_id, rating, comments or None, submitted_by or None, now_ts()),
+        )
+        db.commit()
+        return render_template_string(
+            FEEDBACK_HTML,
+            ticket=dict(ticket_row),
+            show_form=False,
+            submitted=True,
+            error=None,
+            rating_choices=FEEDBACK_RATING_OPTIONS,
+            rating="",
+            comments="",
+            submitted_by="",
+            token=token,
+            ticket_link=ticket_link,
+        )
+
+    return render_template_string(
+        FEEDBACK_HTML,
+        ticket=dict(ticket_row),
+        show_form=True,
+        submitted=False,
+        error=None,
+        rating_choices=FEEDBACK_RATING_OPTIONS,
+        rating="",
+        comments="",
+        submitted_by="",
+        token=token,
+        ticket_link=ticket_link,
+    )
+
 
 # --------------------------------------------------------------------------------------
 # Microsoft 365 sign-in routes
@@ -1609,6 +2063,7 @@ app.jinja_loader = DictLoader({
     "dashboard.html": DASHBOARD_HTML,
     "new.html": NEW_HTML,
     "detail.html": DETAIL_HTML,
+    "feedback.html": FEEDBACK_HTML,
 })
 
 # --------------------------------------------------------------------------------------
