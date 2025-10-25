@@ -44,10 +44,18 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    desc,
     func,
     select,
 )
-from sqlalchemy.orm import Session, declarative_base, relationship, scoped_session, sessionmaker
+from sqlalchemy.orm import (
+    Session,
+    declarative_base,
+    joinedload,
+    relationship,
+    scoped_session,
+    sessionmaker,
+)
 
 GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 _app_token_cache: dict[str, float | str] = {"token": "", "expires": 0.0}
@@ -3128,65 +3136,106 @@ def new_ticket():
 def ticket_detail(ticket_id: int):
     with app.app_context():
         init_db()
-    db = get_db()
-    t = db.execute(
-        """
-        SELECT id, title, description, requester_name, requester_email, branch, priority,
-               category, assignee, status,
-               CAST(created_at AS TEXT) AS created_at,
-               CAST(updated_at AS TEXT) AS updated_at,
-               CAST(completed_at AS TEXT) AS completed_at
-        FROM tickets WHERE id = ?
-        """,
-        (ticket_id,),
-    ).fetchone()
-    if not t:
+    session: Session = get_session()
+
+    ticket = (
+        session.query(Ticket)
+        .options(
+            joinedload(Ticket.comments),
+            joinedload(Ticket.attachments),
+        )
+        .filter(Ticket.id == ticket_id)
+        .one_or_none()
+    )
+    if not ticket:
         flash("Ticket not found.")
         return redirect(url_for("tickets"))
+
+    def _normalize_ts(value):
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value) if value is not None else ""
+            if not text:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                dt = datetime.fromisoformat(text)
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
     admin = is_admin_user()
-    comments = db.execute(
-        """
-        SELECT id, ticket_id, author, body, CAST(created_at AS TEXT) AS created_at
-        FROM comments WHERE ticket_id = ? ORDER BY datetime(created_at) ASC
-        """,
-        (ticket_id,),
-    ).fetchall()
-    attachments_rows = db.execute(
-        """
-        SELECT id, filename, content_type, LENGTH(data) AS size, CAST(uploaded_at AS TEXT) AS uploaded_at
-        FROM attachments
-        WHERE ticket_id = ?
-        ORDER BY datetime(uploaded_at) ASC, id ASC
-        """,
-        (ticket_id,),
-    ).fetchall()
-    attachments = [
+    comments = [
         {
-            "id": row["id"],
-            "filename": row["filename"],
-            "content_type": row["content_type"],
-            "size": row["size"] or 0,
-            "size_label": format_file_size(int(row["size"] or 0)),
-            "uploaded_at": row["uploaded_at"],
+            "id": comment.id,
+            "ticket_id": comment.ticket_id,
+            "author": comment.author,
+            "body": comment.body,
+            "created_at": comment.created_at,
         }
-        for row in attachments_rows
+        for comment in sorted(
+            ticket.comments,
+            key=lambda c: (_normalize_ts(c.created_at), c.id or 0),
+        )
     ]
+    attachments = []
+    for attachment in sorted(
+        ticket.attachments,
+        key=lambda a: (_normalize_ts(a.uploaded_at), a.id or 0),
+    ):
+        data = attachment.data or b""
+        size = len(data)
+        attachments.append(
+            {
+                "id": attachment.id,
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "size": size,
+                "size_label": format_file_size(size),
+                "uploaded_at": attachment.uploaded_at,
+            }
+        )
+
     feedback_entries: list[dict[str, object]] = []
     if admin:
-        feedback_rows = db.execute(
-            """
-            SELECT rating, comments, submitted_by, CAST(submitted_at AS TEXT) AS submitted_at
-            FROM ticket_feedback
-            WHERE ticket_id = ?
-            ORDER BY datetime(submitted_at) DESC, id DESC
-            """,
-            (ticket_id,),
-        ).fetchall()
-        feedback_entries = [dict(row) for row in feedback_rows]
+        feedback_entries = [
+            {
+                "rating": feedback.rating,
+                "comments": feedback.comments,
+                "submitted_by": feedback.submitted_by,
+                "submitted_at": feedback.submitted_at,
+            }
+            for feedback in (
+                session.query(TicketFeedback)
+                .filter(TicketFeedback.ticket_id == ticket_id)
+                .order_by(desc(TicketFeedback.submitted_at), TicketFeedback.id.desc())
+                .all()
+            )
+        ]
+
+    ticket_data = {
+        "id": ticket.id,
+        "title": ticket.title,
+        "description": ticket.description,
+        "requester_name": ticket.requester_name,
+        "requester_email": ticket.requester_email,
+        "branch": ticket.branch,
+        "priority": ticket.priority,
+        "category": ticket.category,
+        "assignee": ticket.assignee,
+        "status": ticket.status,
+        "created_at": ticket.created_at,
+        "updated_at": ticket.updated_at,
+        "completed_at": ticket.completed_at,
+    }
     return render_template_string(
         DETAIL_HTML,
-        t=dict(t),
-        comments=[dict(c) for c in comments],
+        t=ticket_data,
+        comments=comments,
         attachments=attachments,
         statuses=STATUSES,
         admin=admin,
@@ -3202,21 +3251,21 @@ def ticket_detail(ticket_id: int):
 def download_attachment(ticket_id: int, attachment_id: int):
     with app.app_context():
         init_db()
-    db = get_db()
-    attachment = db.execute(
-        """
-        SELECT filename, content_type, data
-        FROM attachments
-        WHERE id = ? AND ticket_id = ?
-        """,
-        (attachment_id, ticket_id),
-    ).fetchone()
+    session: Session = get_session()
+    attachment = (
+        session.query(Attachment)
+            .filter(
+                Attachment.id == attachment_id,
+                Attachment.ticket_id == ticket_id,
+            )
+            .one_or_none()
+    )
     if not attachment:
         abort(404)
     return send_file(
-        io.BytesIO(attachment["data"]),
-        download_name=attachment["filename"],
-        mimetype=attachment["content_type"] or "application/octet-stream",
+        io.BytesIO(attachment.data or b""),
+        download_name=attachment.filename,
+        mimetype=attachment.content_type or "application/octet-stream",
         as_attachment=True,
     )
 
@@ -3231,16 +3280,31 @@ def add_comment(ticket_id: int):
     if not body:
         flash("Comment cannot be empty.")
         return redirect(url_for("ticket_detail", ticket_id=ticket_id))
-    db = get_db()
-    db.execute(
-        "INSERT INTO comments (ticket_id, author, body, created_at) VALUES (?,?,?,?)",
-        (ticket_id, author, body, now_ts()),
+    session: Session = get_session()
+    ticket = session.query(Ticket).filter(Ticket.id == ticket_id).one_or_none()
+    if not ticket:
+        flash("Ticket not found.")
+        return redirect(url_for("tickets"))
+
+    ts = now_ts()
+    comment = Comment(
+        ticket_id=ticket_id,
+        author=author,
+        body=body,
+        created_at=ts,
     )
-    db.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", (now_ts(), ticket_id))
-    db.commit()
+    session.add(comment)
+    ticket.updated_at = ts
+    session.commit()
+
     if is_admin_user():
-        ticket_row = get_ticket_contact(ticket_id, db=db)
-        if ticket_row:
+        ticket_row = {
+            "title": ticket.title,
+            "requester_name": ticket.requester_name,
+            "requester_email": ticket.requester_email,
+            "feedback_token": ticket.feedback_token,
+        }
+        if ticket_row["requester_email"]:
             requester_name = (ticket_row["requester_name"] or "there").strip() or "there"
             ticket_title = ticket_row["title"] or f"Ticket #{ticket_id}"
             comment_html = str(escape(body)).replace("\n", "<br>")
@@ -3250,7 +3314,7 @@ def add_comment(ticket_id: int):
             body_html = f"""
             <p>Hi {escape(requester_name)},</p>
             <p>{escape(author_label)} added a new update to your ticket <strong>{escape(ticket_title)}</strong>.</p>
-            <div style="border-left:4px solid #008752;padding-left:12px;margin:16px 0;">
+            <div style=\"border-left:4px solid #008752;padding-left:12px;margin:16px 0;\">
               <p style=\"margin:0;\">{comment_html}</p>
             </div>
             <p><a href="{ticket_link}">Open your ticket</a> to review the update or add more details.</p>
